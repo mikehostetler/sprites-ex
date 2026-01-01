@@ -61,41 +61,39 @@ defmodule Sprites.Sprite do
   end
 
   defp build_query_params(command, args, opts) do
-    # Each command/arg is a separate "cmd" parameter, first one is also "path"
-    cmd_params = Enum.map([command | args], fn arg -> {"cmd", arg} end)
-    params = [{"path", command} | cmd_params]
+    [{"path", command} | Enum.map([command | args], &{"cmd", &1})]
+    |> add_stdin_param(opts)
+    |> add_dir_param(opts)
+    |> add_env_params(opts)
+    |> add_tty_params(opts)
+  end
 
-    # Add stdin parameter - tells server whether to expect stdin data
+  defp add_stdin_param(params, opts) do
     stdin = if Keyword.get(opts, :stdin, false), do: "true", else: "false"
-    params = [{"stdin", stdin} | params]
+    [{"stdin", stdin} | params]
+  end
 
-    params =
-      if dir = Keyword.get(opts, :dir) do
-        [{"dir", dir} | params]
-      else
-        params
-      end
+  defp add_dir_param(params, opts) do
+    case Keyword.get(opts, :dir) do
+      nil -> params
+      dir -> [{"dir", dir} | params]
+    end
+  end
 
-    params =
-      case Keyword.get(opts, :env, []) do
-        [] ->
-          params
+  defp add_env_params(params, opts) do
+    case Keyword.get(opts, :env, []) do
+      [] -> params
+      env_list -> Enum.map(env_list, fn {k, v} -> {"env", "#{k}=#{v}"} end) ++ params
+    end
+  end
 
-        env_list ->
-          # Each env var is a separate "env" parameter
-          env_params = Enum.map(env_list, fn {k, v} -> {"env", "#{k}=#{v}"} end)
-          env_params ++ params
-      end
-
-    params =
-      if Keyword.get(opts, :tty, false) do
-        rows = Keyword.get(opts, :tty_rows, 24)
-        cols = Keyword.get(opts, :tty_cols, 80)
-        [{"tty", "true"}, {"rows", to_string(rows)}, {"cols", to_string(cols)} | params]
-      else
-        params
-      end
-
-    params
+  defp add_tty_params(params, opts) do
+    if Keyword.get(opts, :tty, false) do
+      rows = Keyword.get(opts, :tty_rows, 24)
+      cols = Keyword.get(opts, :tty_cols, 80)
+      [{"tty", "true"}, {"rows", to_string(rows)}, {"cols", to_string(cols)} | params]
+    else
+      params
+    end
   end
 end
