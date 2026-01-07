@@ -164,7 +164,7 @@ defmodule Sprites.Client do
   def update_url_settings(client, name, settings) do
     body = %{url_settings: settings}
 
-    case Req.put(client.req, url: "/v1/sprites/#{URI.encode(name)}/url-settings", json: body) do
+    case Req.put(client.req, url: "/v1/sprites/#{URI.encode(name)}", json: body) do
       {:ok, %{status: status}} when status in 200..299 ->
         :ok
 
