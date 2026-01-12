@@ -7,6 +7,17 @@ sprite_name = System.get_env("SPRITE_NAME")
 client = Sprites.new(token)
 sprite = Sprites.sprite(client, sprite_name)
 
-{output, _exit_code} = Sprites.cmd(sprite, "echo", ["hello", "world"])
+# Start a command that runs for 30s (TTY sessions stay alive after disconnect)
+{:ok, cmd} = Sprites.spawn(sprite, "python", ["-c",
+  "import time; print('Server ready on port 8080', flush=True); time.sleep(30)"],
+  tty: true)  # TTY sessions are detachable
 
-IO.write(output)
+ref = cmd.ref
+
+# Read for 2 seconds then exit (session keeps running)
+receive do
+  {:stdout, %{ref: ^ref}, data} ->
+    IO.write(data)
+after
+  2000 -> :ok
+end
