@@ -123,27 +123,8 @@ defmodule Sprites.Error do
     rate_limit_remaining = parse_int_header(headers_map, "x-ratelimit-remaining")
     rate_limit_reset = parse_int_header(headers_map, "x-ratelimit-reset")
 
-    # Try to parse JSON body
     {error_code, message, limit, window_seconds, retry_after_seconds, current_count,
-     upgrade_available,
-     upgrade_url} =
-      case Jason.decode(body) do
-        {:ok, data} when is_map(data) ->
-          {
-            Map.get(data, "error"),
-            Map.get(data, "message"),
-            Map.get(data, "limit"),
-            Map.get(data, "window_seconds"),
-            Map.get(data, "retry_after_seconds"),
-            Map.get(data, "current_count"),
-            Map.get(data, "upgrade_available", false),
-            Map.get(data, "upgrade_url")
-          }
-
-        _ ->
-          # Use raw body as message
-          {nil, body, nil, nil, nil, nil, false, nil}
-      end
+     upgrade_available, upgrade_url} = parse_error_body(body)
 
     # Fallback message if nothing was parsed
     final_message =
@@ -153,23 +134,75 @@ defmodule Sprites.Error do
         true -> "API error (status #{status})"
       end
 
+    parsed_payload =
+      %{
+        "status" => status,
+        "message" => final_message,
+        "body" => body,
+        "error_code" => error_code,
+        "limit" => limit,
+        "window_seconds" => window_seconds,
+        "retry_after_seconds" => retry_after_seconds,
+        "current_count" => current_count,
+        "upgrade_available" => upgrade_available,
+        "upgrade_url" => upgrade_url,
+        "retry_after_header" => retry_after_header,
+        "rate_limit_limit" => rate_limit_limit,
+        "rate_limit_remaining" => rate_limit_remaining,
+        "rate_limit_reset" => rate_limit_reset
+      }
+      |> parse_api_error_payload()
+
     {:ok,
      %APIError{
-       status: status,
-       message: final_message,
-       body: body,
-       error_code: error_code,
-       limit: limit,
-       window_seconds: window_seconds,
-       retry_after_seconds: retry_after_seconds,
-       current_count: current_count,
-       upgrade_available: upgrade_available,
-       upgrade_url: upgrade_url,
-       retry_after_header: retry_after_header,
-       rate_limit_limit: rate_limit_limit,
-       rate_limit_remaining: rate_limit_remaining,
-       rate_limit_reset: rate_limit_reset
+       status: Map.get(parsed_payload, "status"),
+       message: Map.get(parsed_payload, "message"),
+       body: Map.get(parsed_payload, "body"),
+       error_code: Map.get(parsed_payload, "error_code"),
+       limit: Map.get(parsed_payload, "limit"),
+       window_seconds: Map.get(parsed_payload, "window_seconds"),
+       retry_after_seconds: Map.get(parsed_payload, "retry_after_seconds"),
+       current_count: Map.get(parsed_payload, "current_count"),
+       upgrade_available: Map.get(parsed_payload, "upgrade_available"),
+       upgrade_url: Map.get(parsed_payload, "upgrade_url"),
+       retry_after_header: Map.get(parsed_payload, "retry_after_header"),
+       rate_limit_limit: Map.get(parsed_payload, "rate_limit_limit"),
+       rate_limit_remaining: Map.get(parsed_payload, "rate_limit_remaining"),
+       rate_limit_reset: Map.get(parsed_payload, "rate_limit_reset")
      }}
+  end
+
+  defp parse_error_body(body) do
+    case Jason.decode(body) do
+      {:ok, data} when is_map(data) ->
+        parsed =
+          case Sprites.Shapes.parse_api_error_body(data) do
+            {:ok, parsed} -> parsed
+            {:error, _reason} -> data
+          end
+
+        {
+          Map.get(parsed, "error"),
+          Map.get(parsed, "message"),
+          Map.get(parsed, "limit"),
+          Map.get(parsed, "window_seconds"),
+          Map.get(parsed, "retry_after_seconds"),
+          Map.get(parsed, "current_count"),
+          Map.get(parsed, "upgrade_available", false),
+          Map.get(parsed, "upgrade_url")
+        }
+
+      _ ->
+        # Use raw body as message
+        {nil, body, nil, nil, nil, nil, false, nil}
+    end
+  end
+
+  defp parse_api_error_payload(payload) do
+    case Sprites.Shapes.parse_api_error(payload) do
+      {:ok, parsed} -> parsed
+      {:error, _reason} -> payload
+    end
   end
 
   defp parse_int_header(headers, key) do

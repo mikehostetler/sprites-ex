@@ -180,6 +180,58 @@ defmodule Sprites.Shapes do
                                unrecognized_keys: :preserve
                              )
 
+  @api_error_body_schema Zoi.map(
+                           %{
+                             "error" => Zoi.string() |> Zoi.optional(),
+                             "message" => Zoi.string() |> Zoi.optional(),
+                             "limit" => Zoi.integer() |> Zoi.optional(),
+                             "window_seconds" => Zoi.integer() |> Zoi.optional(),
+                             "retry_after_seconds" => Zoi.integer() |> Zoi.optional(),
+                             "current_count" => Zoi.integer() |> Zoi.optional(),
+                             "upgrade_available" => Zoi.boolean() |> Zoi.optional(),
+                             "upgrade_url" => Zoi.string() |> Zoi.optional()
+                           },
+                           unrecognized_keys: :preserve
+                         )
+
+  @api_error_schema Zoi.map(
+                      %{
+                        "status" => Zoi.integer(),
+                        "message" => Zoi.string(),
+                        "body" => Zoi.string(),
+                        "error_code" => Zoi.string() |> Zoi.nullish() |> Zoi.optional(),
+                        "limit" => Zoi.integer() |> Zoi.nullish() |> Zoi.optional(),
+                        "window_seconds" => Zoi.integer() |> Zoi.nullish() |> Zoi.optional(),
+                        "retry_after_seconds" => Zoi.integer() |> Zoi.nullish() |> Zoi.optional(),
+                        "current_count" => Zoi.integer() |> Zoi.nullish() |> Zoi.optional(),
+                        "upgrade_available" => Zoi.boolean() |> Zoi.optional(),
+                        "upgrade_url" => Zoi.string() |> Zoi.nullish() |> Zoi.optional(),
+                        "retry_after_header" => Zoi.integer() |> Zoi.nullish() |> Zoi.optional(),
+                        "rate_limit_limit" => Zoi.integer() |> Zoi.nullish() |> Zoi.optional(),
+                        "rate_limit_remaining" =>
+                          Zoi.integer() |> Zoi.nullish() |> Zoi.optional(),
+                        "rate_limit_reset" => Zoi.integer() |> Zoi.nullish() |> Zoi.optional()
+                      },
+                      unrecognized_keys: :preserve
+                    )
+
+  @stream_message_schema Zoi.map(
+                           %{
+                             "type" => Zoi.string() |> Zoi.optional(),
+                             "data" => Zoi.string() |> Zoi.optional(),
+                             "error" => Zoi.string() |> Zoi.optional(),
+                             "message" => Zoi.string() |> Zoi.optional(),
+                             "time" => Zoi.string() |> Zoi.optional(),
+                             "timestamp" => Zoi.number() |> Zoi.optional(),
+                             "exit_code" => Zoi.number() |> Zoi.optional(),
+                             "signal" => Zoi.string() |> Zoi.optional(),
+                             "pid" => Zoi.number() |> Zoi.optional(),
+                             "log_files" =>
+                               Zoi.map(%{}, unrecognized_keys: :preserve) |> Zoi.optional()
+                           },
+                           unrecognized_keys: :preserve
+                         )
+
   @spec parse_sprite(term()) :: {:ok, map()} | {:error, parse_error()}
   def parse_sprite(input), do: parse(@sprite_schema, input, :sprite)
 
@@ -216,6 +268,15 @@ defmodule Sprites.Shapes do
 
   @spec parse_exec_http_response(term()) :: {:ok, map()} | {:error, parse_error()}
   def parse_exec_http_response(input), do: parse(@exec_http_response_schema, input, :exec_http)
+
+  @spec parse_api_error_body(term()) :: {:ok, map()} | {:error, parse_error()}
+  def parse_api_error_body(input), do: parse(@api_error_body_schema, input, :api_error_body)
+
+  @spec parse_api_error(term()) :: {:ok, map()} | {:error, parse_error()}
+  def parse_api_error(input), do: parse(@api_error_schema, input, :api_error)
+
+  @spec parse_stream_message(term()) :: {:ok, map()} | {:error, parse_error()}
+  def parse_stream_message(input), do: parse(@stream_message_schema, input, :stream_message)
 
   @spec parse(Zoi.schema(), term(), atom()) :: {:ok, map()} | {:error, parse_error()}
   def parse(schema, input, label) do

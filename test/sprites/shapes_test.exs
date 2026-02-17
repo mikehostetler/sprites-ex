@@ -41,4 +41,32 @@ defmodule Sprites.ShapesTest do
     assert {:ok, parsed} = Shapes.parse_exec_kill_event(event)
     assert parsed["exit_code"] == 143
   end
+
+  test "parse_api_error_body validates typed error payload fields" do
+    input = %{
+      "error" => "concurrent_sprite_limit_exceeded",
+      "message" => "Too many concurrent sprites",
+      "limit" => 5,
+      "current_count" => 5,
+      "upgrade_available" => true
+    }
+
+    assert {:ok, parsed} = Shapes.parse_api_error_body(input)
+    assert parsed["error"] == "concurrent_sprite_limit_exceeded"
+    assert parsed["limit"] == 5
+  end
+
+  test "parse_stream_message validates normalized stream messages" do
+    input = %{
+      "type" => "complete",
+      "message" => "done",
+      "exit_code" => 0,
+      "timestamp" => 1_767_609_000_000,
+      "log_files" => %{"stdout" => "/tmp/stdout.log"}
+    }
+
+    assert {:ok, parsed} = Shapes.parse_stream_message(input)
+    assert parsed["type"] == "complete"
+    assert parsed["log_files"]["stdout"] == "/tmp/stdout.log"
+  end
 end

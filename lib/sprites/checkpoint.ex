@@ -252,22 +252,29 @@ defmodule Sprites.StreamMessage do
     :raw
   ]
 
+  alias Sprites.Shapes
+
   @doc """
   Creates a stream message from a map.
   """
   @spec from_map(map(), map() | nil) :: t()
   def from_map(map, raw \\ nil) when is_map(map) do
+    parsed =
+      map
+      |> normalize_stream_message()
+      |> parse_stream_message()
+
     %__MODULE__{
-      type: Map.get(map, "type") || Map.get(map, :type),
-      data: Map.get(map, "data") || Map.get(map, :data),
-      error: Map.get(map, "error") || Map.get(map, :error),
-      message: Map.get(map, "message") || Map.get(map, :message),
-      time: Map.get(map, "time") || Map.get(map, :time),
-      timestamp: Map.get(map, "timestamp") || Map.get(map, :timestamp),
-      exit_code: Map.get(map, "exit_code") || Map.get(map, :exit_code),
-      signal: Map.get(map, "signal") || Map.get(map, :signal),
-      pid: Map.get(map, "pid") || Map.get(map, :pid),
-      log_files: Map.get(map, "log_files") || Map.get(map, :log_files),
+      type: Map.get(parsed, "type"),
+      data: Map.get(parsed, "data"),
+      error: Map.get(parsed, "error"),
+      message: Map.get(parsed, "message"),
+      time: Map.get(parsed, "time"),
+      timestamp: Map.get(parsed, "timestamp"),
+      exit_code: Map.get(parsed, "exit_code"),
+      signal: Map.get(parsed, "signal"),
+      pid: Map.get(parsed, "pid"),
+      log_files: Map.get(parsed, "log_files"),
       raw: raw || map
     }
   end
@@ -288,6 +295,31 @@ defmodule Sprites.StreamMessage do
     |> maybe_put(:signal, msg.signal)
     |> maybe_put(:pid, msg.pid)
     |> maybe_put(:log_files, msg.log_files)
+  end
+
+  defp normalize_stream_message(map) do
+    %{}
+    |> maybe_put("type", field(map, "type", :type))
+    |> maybe_put("data", field(map, "data", :data))
+    |> maybe_put("error", field(map, "error", :error))
+    |> maybe_put("message", field(map, "message", :message))
+    |> maybe_put("time", field(map, "time", :time))
+    |> maybe_put("timestamp", field(map, "timestamp", :timestamp))
+    |> maybe_put("exit_code", field(map, "exit_code", :exit_code))
+    |> maybe_put("signal", field(map, "signal", :signal))
+    |> maybe_put("pid", field(map, "pid", :pid))
+    |> maybe_put("log_files", field(map, "log_files", :log_files))
+  end
+
+  defp parse_stream_message(map) do
+    case Shapes.parse_stream_message(map) do
+      {:ok, parsed} -> parsed
+      {:error, _reason} -> map
+    end
+  end
+
+  defp field(map, string_key, atom_key) do
+    Map.get(map, string_key) || Map.get(map, atom_key)
   end
 
   defp maybe_put(map, _key, nil), do: map
