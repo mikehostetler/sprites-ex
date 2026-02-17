@@ -4,7 +4,7 @@ defmodule Sprites.Live.SmokeTest do
   @moduletag :integration
   @moduletag :live
   @moduletag skip:
-               if(System.get_env("SPRITES_TEST_TOKEN") in [nil, ""],
+               if(Sprites.LiveCase.live_token() in [nil, ""],
                  do: "SPRITES_TEST_TOKEN not set",
                  else: false
                )
