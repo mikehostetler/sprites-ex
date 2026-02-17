@@ -16,7 +16,7 @@ defmodule Sprites.Live.SmokeTest do
     name = unique_sprite_name("sprites-ex-live")
 
     try do
-      assert {:ok, sprite} = Sprites.create(client, name)
+      assert {:ok, sprite} = create_sprite(client, name)
       assert sprite.name == name
 
       assert {:ok, info} = Sprites.get_sprite(client, name)

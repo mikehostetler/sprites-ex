@@ -8,11 +8,14 @@ defmodule Sprites.LiveCase do
 
   use ExUnit.CaseTemplate
 
+  alias Sprites.Error.APIError
+
   @env_loaded_key {__MODULE__, :env_loaded}
 
   using do
     quote do
       import Sprites.LiveCase
+      @moduletag timeout: 180_000
     end
   end
 
@@ -44,6 +47,49 @@ defmodule Sprites.LiveCase do
     suffix = System.unique_integer([:positive, :monotonic])
     "#{prefix}-#{suffix}"
   end
+
+  @spec create_sprite(Sprites.Client.t(), String.t(), keyword(), non_neg_integer()) ::
+          {:ok, Sprites.Sprite.t()} | {:error, term()}
+  def create_sprite(client, name, opts \\ [], max_wait_ms \\ 90_000) do
+    deadline = System.monotonic_time(:millisecond) + max_wait_ms
+    do_create_sprite(client, name, opts, deadline, 3)
+  end
+
+  defp do_create_sprite(client, name, opts, deadline, auth_retries_left) do
+    case Sprites.create(client, name, opts) do
+      {:ok, _sprite} = ok ->
+        ok
+
+      {:error, %APIError{status: 429} = error} ->
+        retry_after_ms = retry_after_ms(error)
+
+        if System.monotonic_time(:millisecond) + retry_after_ms < deadline do
+          Process.sleep(retry_after_ms)
+          do_create_sprite(client, name, opts, deadline, auth_retries_left)
+        else
+          {:error, error}
+        end
+
+      {:error, %APIError{status: 401} = _error} when auth_retries_left > 0 ->
+        Process.sleep(1_000)
+        do_create_sprite(client, name, opts, deadline, auth_retries_left - 1)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp retry_after_ms(%APIError{retry_after_seconds: seconds})
+       when is_integer(seconds) and seconds > 0 do
+    seconds * 1_000
+  end
+
+  defp retry_after_ms(%APIError{retry_after_header: seconds})
+       when is_integer(seconds) and seconds > 0 do
+    seconds * 1_000
+  end
+
+  defp retry_after_ms(_), do: 5_000
 
   defp ensure_env_loaded do
     case :persistent_term.get(@env_loaded_key, false) do

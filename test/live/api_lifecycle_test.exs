@@ -16,7 +16,7 @@ defmodule Sprites.Live.APILifecycleTest do
     name = unique_sprite_name("sprites-ex-live-exec")
 
     try do
-      assert {:ok, sprite} = Sprites.create(client, name)
+      assert {:ok, sprite} = create_sprite(client, name)
 
       assert {:ok, http_result} =
                Sprites.exec_http(sprite, "sh", ["-lc", "echo sprites-ex-live-exec"])
@@ -54,7 +54,10 @@ defmodule Sprites.Live.APILifecycleTest do
     name = unique_sprite_name("sprites-ex-live-checkpoint")
 
     try do
-      assert {:ok, sprite} = Sprites.create(client, name)
+      assert {:ok, sprite} = create_sprite(client, name)
+
+      assert {:ok, _checkpoint_cmd} = Sprites.spawn(sprite, "sh", ["-lc", "sleep 120"])
+      assert {:ok, _session} = wait_for_active_session(sprite, 20_000)
 
       assert {:ok, create_stream} =
                Sprites.create_checkpoint(sprite, comment: "sprites-ex live checkpoint")
