@@ -125,6 +125,25 @@ defmodule Sprites do
   end
 
   @doc """
+  Executes a command via HTTP POST (`/v1/sprites/{name}/exec`).
+
+  This is a non-WebSocket alternative for restricted environments.
+
+  ## Options
+
+    * `:path` - Explicit executable path
+    * `:stdin` - Whether request body should be forwarded as stdin
+    * `:stdin_data` - Request body content
+    * `:env` - Environment variables as a list of `{key, value}` tuples
+    * `:dir` - Working directory
+  """
+  @spec exec_http(sprite(), String.t(), [String.t()], keyword()) ::
+          {:ok, term()} | {:error, term()}
+  def exec_http(%Sprite{client: client, name: name}, command, args \\ [], opts \\ []) do
+    Client.exec_http(client, name, command, args, opts)
+  end
+
+  @doc """
   Spawns an async command, similar to `Port.open/2`.
 
   Returns `{:ok, command}` where command is a handle for the running process.
@@ -356,9 +375,84 @@ defmodule Sprites do
   @spec attach_session(sprite(), String.t(), keyword()) :: {:ok, command()} | {:error, term()}
   def attach_session(sprite, session_id, opts \\ []) do
     opts = Keyword.put(opts, :session_id, session_id)
-    # When attaching to a session, we spawn with empty command
-    # The session_id will be sent as a query param
     Command.start(sprite, "", [], opts)
+  end
+
+  @doc """
+  Kills an active exec session.
+
+  Returns an NDJSON stream of kill progress events.
+
+  ## Options
+
+    * `:signal` - Signal name (default server-side: `SIGTERM`)
+    * `:timeout` - Wait duration (default server-side: `10s`)
+
+  ## Examples
+
+      {:ok, events} = Sprites.kill_session(sprite, "123", signal: "SIGTERM")
+      Enum.each(events, &IO.inspect/1)
+  """
+  @spec kill_session(sprite(), String.t() | integer(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, term()}
+  def kill_session(sprite, session_id, opts \\ []) do
+    Sprites.Session.kill(sprite, session_id, opts)
+  end
+
+  # ============================================================================
+  # Services API
+  # ============================================================================
+
+  @doc """
+  Lists services configured for a sprite.
+  """
+  @spec list_services(sprite()) :: {:ok, [Sprites.Service.t()]} | {:error, term()}
+  def list_services(sprite) do
+    Sprites.Service.list(sprite)
+  end
+
+  @doc """
+  Gets a service by name.
+  """
+  @spec get_service(sprite(), String.t()) :: {:ok, Sprites.Service.t()} | {:error, term()}
+  def get_service(sprite, service_name) do
+    Sprites.Service.get(sprite, service_name)
+  end
+
+  @doc """
+  Creates or updates a service definition.
+  """
+  @spec upsert_service(sprite(), String.t(), map(), keyword()) ::
+          {:ok, Sprites.Service.t()} | {:error, term()}
+  def upsert_service(sprite, service_name, attrs, opts \\ []) do
+    Sprites.Service.upsert(sprite, service_name, attrs, opts)
+  end
+
+  @doc """
+  Starts a service and streams startup events.
+  """
+  @spec start_service(sprite(), String.t(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, term()}
+  def start_service(sprite, service_name, opts \\ []) do
+    Sprites.Service.start(sprite, service_name, opts)
+  end
+
+  @doc """
+  Stops a service and streams shutdown events.
+  """
+  @spec stop_service(sprite(), String.t(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, term()}
+  def stop_service(sprite, service_name, opts \\ []) do
+    Sprites.Service.stop(sprite, service_name, opts)
+  end
+
+  @doc """
+  Streams service logs.
+  """
+  @spec service_logs(sprite(), String.t(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, term()}
+  def service_logs(sprite, service_name, opts \\ []) do
+    Sprites.Service.logs(sprite, service_name, opts)
   end
 
   # ============================================================================
@@ -475,5 +569,15 @@ defmodule Sprites do
   @spec list(client(), keyword()) :: {:ok, [map()]} | {:error, term()}
   def list(client, opts \\ []) do
     Client.list_sprites(client, opts)
+  end
+
+  @doc """
+  Lists sprites with pagination metadata.
+
+  Returns `%{\"sprites\" => [...], \"has_more\" => boolean(), \"next_continuation_token\" => token_or_nil}`.
+  """
+  @spec list_page(client(), keyword()) :: {:ok, map()} | {:error, term()}
+  def list_page(client, opts \\ []) do
+    Client.list_sprites_page(client, opts)
   end
 end

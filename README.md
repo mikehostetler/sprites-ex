@@ -115,6 +115,36 @@ sprite
 |> Stream.run()
 ```
 
+### REST/Session/Services APIs
+
+```elixir
+# Paged sprite listing (non-breaking alternative to Sprites.list/2)
+{:ok, page} = Sprites.list_page(client, max_results: 10)
+page["sprites"]
+page["next_continuation_token"]
+
+# HTTP POST exec (non-websocket)
+{:ok, result} = Sprites.exec_http(sprite, "python", ["-c", "print(1)"])
+
+# List/attach/kill exec sessions
+{:ok, sessions} = Sprites.list_sessions(sprite)
+{:ok, cmd} = Sprites.attach_session(sprite, to_string(hd(sessions).id))
+{:ok, kill_events} = Sprites.kill_session(sprite, to_string(hd(sessions).id), signal: "SIGTERM")
+
+# Services lifecycle
+{:ok, _service} =
+  Sprites.upsert_service(sprite, "web", %{
+    cmd: "python",
+    args: ["-m", "http.server", "8000"],
+    needs: [],
+    http_port: 8000
+  })
+
+{:ok, _start_events} = Sprites.start_service(sprite, "web", duration: "5s")
+{:ok, _log_events} = Sprites.service_logs(sprite, "web", lines: 100, duration: "0")
+{:ok, _stop_events} = Sprites.stop_service(sprite, "web", timeout: "10s")
+```
+
 ## Test CLI
 
 The SDK includes a test CLI for integration testing with the shared test harness:
@@ -156,6 +186,29 @@ export SPRITES_TOKEN=your-token
 | `-log-target <path>` | JSON event log file |
 
 ## Running SDK Tests
+
+Run unit tests only (default):
+
+```bash
+mix test
+```
+
+Run live integration tests:
+
+```bash
+export SPRITES_TEST_TOKEN=your-token
+# Optional:
+export SPRITES_TEST_BASE_URL=https://api.sprites.dev
+
+mix test.live
+# equivalent:
+# mix test --include integration --include live
+```
+
+By default, tests tagged with `:integration` and `:live` are excluded unless
+you include them explicitly.
+
+### Shared Harness
 
 The Elixir SDK is compatible with the shared test harness:
 
