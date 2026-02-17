@@ -100,14 +100,8 @@ defmodule Sprites.Session do
     with {:ok, body} <-
            client.req
            |> HTTP.get(url: "/v1/sprites/#{URI.encode(name)}/exec")
-           |> HTTP.unwrap_body() do
-      sessions =
-        case body do
-          %{"sessions" => list} when is_list(list) -> list
-          list when is_list(list) -> list
-          _ -> []
-        end
-
+           |> HTTP.unwrap_body(),
+         {:ok, sessions} <- extract_sessions(body) do
       parsed_sessions =
         Enum.map(sessions, fn session ->
           case Shapes.parse_session(session) do
@@ -193,4 +187,18 @@ defmodule Sprites.Session do
 
   defp maybe_put_param(params, _key, nil), do: params
   defp maybe_put_param(params, key, value), do: params ++ [{key, value}]
+
+  defp extract_sessions(%{"sessions" => sessions}) when is_list(sessions),
+    do: ensure_map_list(sessions)
+
+  defp extract_sessions(sessions) when is_list(sessions), do: ensure_map_list(sessions)
+  defp extract_sessions(other), do: {:error, {:unexpected_response_shape, other}}
+
+  defp ensure_map_list(items) do
+    if Enum.all?(items, &is_map/1) do
+      {:ok, items}
+    else
+      {:error, {:unexpected_response_shape, items}}
+    end
+  end
 end

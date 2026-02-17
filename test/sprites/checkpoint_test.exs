@@ -47,6 +47,30 @@ defmodule Sprites.CheckpointTest do
     assert %DateTime{} = checkpoint.create_time
   end
 
+  test "list_by_name returns shape error for unexpected payload" do
+    fake = fn request ->
+      response = %Req.Response{status: 200, body: %{"unexpected" => true}, headers: []}
+      {request, response}
+    end
+
+    client = client_with_adapter(fake)
+
+    assert {:error, {:unexpected_response_shape, %{"unexpected" => true}}} =
+             Checkpoint.list_by_name(client, "demo")
+  end
+
+  test "get_by_name returns shape error for unexpected payload" do
+    fake = fn request ->
+      response = %Req.Response{status: 200, body: ["unexpected"], headers: []}
+      {request, response}
+    end
+
+    client = client_with_adapter(fake)
+
+    assert {:error, {:unexpected_response_shape, ["unexpected"]}} =
+             Checkpoint.get_by_name(client, "demo", "v1")
+  end
+
   test "create_by_name streams typed checkpoint messages" do
     {:ok, server} =
       TestHTTPServer.start_once(fn socket, _request ->

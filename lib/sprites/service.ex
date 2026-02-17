@@ -98,15 +98,24 @@ defmodule Sprites.Service do
     with {:ok, body} <-
            client.req
            |> HTTP.get(url: "/v1/sprites/#{URI.encode(name)}/services")
-           |> HTTP.unwrap_body() do
-      services =
-        case body do
-          list when is_list(list) -> list
-          %{"services" => list} when is_list(list) -> list
-          _ -> []
-        end
-
+           |> HTTP.unwrap_body(),
+         {:ok, services} <- extract_services(body) do
       {:ok, Enum.map(services, &from_map/1)}
+    end
+  end
+
+  defp extract_services(services) when is_list(services), do: ensure_map_list(services)
+
+  defp extract_services(%{"services" => services}) when is_list(services),
+    do: ensure_map_list(services)
+
+  defp extract_services(other), do: {:error, {:unexpected_response_shape, other}}
+
+  defp ensure_map_list(items) do
+    if Enum.all?(items, &is_map/1) do
+      {:ok, items}
+    else
+      {:error, {:unexpected_response_shape, items}}
     end
   end
 
@@ -128,8 +137,9 @@ defmodule Sprites.Service do
            |> HTTP.get(
              url: "/v1/sprites/#{URI.encode(name)}/services/#{URI.encode(service_name)}"
            )
-           |> HTTP.unwrap_body() do
-      {:ok, from_map(body)}
+           |> HTTP.unwrap_body(),
+         {:ok, service} <- extract_service(body) do
+      {:ok, service}
     end
   end
 
@@ -162,8 +172,9 @@ defmodule Sprites.Service do
              params: params,
              json: payload
            )
-           |> HTTP.unwrap_body() do
-      {:ok, from_map(body)}
+           |> HTTP.unwrap_body(),
+         {:ok, service} <- extract_service(body) do
+      {:ok, service}
     end
   end
 
@@ -283,6 +294,9 @@ defmodule Sprites.Service do
   defp maybe_put_param(params, _key, nil), do: params
   defp maybe_put_param(params, _key, ""), do: params
   defp maybe_put_param(params, key, value), do: params ++ [{key, value}]
+
+  defp extract_service(%{} = service), do: {:ok, from_map(service)}
+  defp extract_service(other), do: {:error, {:unexpected_response_shape, other}}
 
   defp first_present(opts, keys) do
     Enum.find_value(keys, fn key ->

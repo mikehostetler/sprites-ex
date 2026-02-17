@@ -94,8 +94,8 @@ defmodule Sprites do
       :ok = Sprites.destroy(sprite)
   """
   @spec destroy(sprite()) :: :ok | {:error, term()}
-  def destroy(sprite) do
-    Sprite.destroy(sprite)
+  def destroy(%Sprite{client: client, name: name}) do
+    Client.delete_sprite(client, name)
   end
 
   @doc """

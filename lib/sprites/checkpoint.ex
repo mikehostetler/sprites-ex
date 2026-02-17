@@ -86,14 +86,9 @@ defmodule Sprites.Checkpoint do
     with {:ok, body} <-
            client.req
            |> HTTP.get(url: "/v1/sprites/#{URI.encode(name)}/checkpoints", params: params)
-           |> HTTP.unwrap_body() do
-      case body do
-        list when is_list(list) ->
-          {:ok, Enum.map(list, &checkpoint_from_api/1)}
-
-        _ ->
-          {:error, {:unexpected_response_shape, body}}
-      end
+           |> HTTP.unwrap_body(),
+         {:ok, checkpoints} <- extract_checkpoint_list(body) do
+      {:ok, Enum.map(checkpoints, &checkpoint_from_api/1)}
     end
   end
 
@@ -119,8 +114,9 @@ defmodule Sprites.Checkpoint do
            |> HTTP.get(
              url: "/v1/sprites/#{URI.encode(name)}/checkpoints/#{URI.encode(checkpoint_id)}"
            )
-           |> HTTP.unwrap_body() do
-      {:ok, checkpoint_from_api(body)}
+           |> HTTP.unwrap_body(),
+         {:ok, checkpoint} <- extract_checkpoint(body) do
+      {:ok, checkpoint_from_api(checkpoint)}
     end
   end
 
@@ -204,6 +200,19 @@ defmodule Sprites.Checkpoint do
       {:error, _reason} -> StreamMessage.from_map(map, map)
     end
   end
+
+  defp extract_checkpoint_list(checkpoints) when is_list(checkpoints) do
+    if Enum.all?(checkpoints, &is_map/1) do
+      {:ok, checkpoints}
+    else
+      {:error, {:unexpected_response_shape, checkpoints}}
+    end
+  end
+
+  defp extract_checkpoint_list(other), do: {:error, {:unexpected_response_shape, other}}
+
+  defp extract_checkpoint(%{} = checkpoint), do: {:ok, checkpoint}
+  defp extract_checkpoint(other), do: {:error, {:unexpected_response_shape, other}}
 end
 
 defmodule Sprites.StreamMessage do

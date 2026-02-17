@@ -56,6 +56,42 @@ defmodule Sprites.SessionTest do
              Session.list_by_name(client, "demo")
   end
 
+  test "list_by_name returns shape error for unexpected payload" do
+    fake = fn request ->
+      response =
+        %Req.Response{
+          status: 200,
+          body: %{"unexpected" => true},
+          headers: []
+        }
+
+      {request, response}
+    end
+
+    client = client_with_adapter(fake)
+
+    assert {:error, {:unexpected_response_shape, %{"unexpected" => true}}} =
+             Session.list_by_name(client, "demo")
+  end
+
+  test "list_by_name returns shape error when list contains non-map entries" do
+    fake = fn request ->
+      response =
+        %Req.Response{
+          status: 200,
+          body: [%{"id" => 1, "command" => "ls"}, "bad"],
+          headers: []
+        }
+
+      {request, response}
+    end
+
+    client = client_with_adapter(fake)
+
+    assert {:error, {:unexpected_response_shape, [%{"id" => 1, "command" => "ls"}, "bad"]}} =
+             Session.list_by_name(client, "demo")
+  end
+
   test "kill_by_name streams kill events" do
     parent = self()
 

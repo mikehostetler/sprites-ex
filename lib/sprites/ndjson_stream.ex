@@ -69,13 +69,15 @@ defmodule Sprites.NDJSONStream do
             {:ok, parse_non_stream_body(body, parser)}
 
           false ->
-            {:error,
-             Error.parse_api_error(
-               status,
-               IO.iodata_to_binary(body),
-               request_headers ++ response_headers
-             )
-             |> elem(1)}
+            body_binary = IO.iodata_to_binary(body)
+
+            case Error.parse_api_error(status, body_binary, request_headers ++ response_headers) do
+              {:ok, %Error.APIError{} = api_error} ->
+                {:error, api_error}
+
+              {:ok, nil} ->
+                {:error, {:http_status, status, body_binary}}
+            end
         end
 
       {:http, {^request_id, {:error, reason}}} ->

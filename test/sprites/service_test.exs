@@ -50,6 +50,42 @@ defmodule Sprites.ServiceTest do
     assert service.state.pid == 1234
   end
 
+  test "list_by_name returns shape error for unexpected payload" do
+    fake = fn request ->
+      response =
+        %Req.Response{
+          status: 200,
+          body: %{"unexpected" => true},
+          headers: []
+        }
+
+      {request, response}
+    end
+
+    client = client_with_adapter(fake)
+
+    assert {:error, {:unexpected_response_shape, %{"unexpected" => true}}} =
+             Service.list_by_name(client, "demo")
+  end
+
+  test "list_by_name returns shape error when list contains non-map entries" do
+    fake = fn request ->
+      response =
+        %Req.Response{
+          status: 200,
+          body: [%{"name" => "web", "cmd" => "python"}, "bad"],
+          headers: []
+        }
+
+      {request, response}
+    end
+
+    client = client_with_adapter(fake)
+
+    assert {:error, {:unexpected_response_shape, [%{"name" => "web", "cmd" => "python"}, "bad"]}} =
+             Service.list_by_name(client, "demo")
+  end
+
   test "upsert_by_name forwards duration only when provided" do
     parent = self()
 
@@ -84,6 +120,18 @@ defmodule Sprites.ServiceTest do
     body = request.body |> IO.iodata_to_binary() |> Jason.decode!()
     assert body["name"] == "web"
     assert body["cmd"] == "python"
+  end
+
+  test "get_by_name returns shape error for unexpected payload" do
+    fake = fn request ->
+      response = %Req.Response{status: 200, body: ["unexpected"], headers: []}
+      {request, response}
+    end
+
+    client = client_with_adapter(fake)
+
+    assert {:error, {:unexpected_response_shape, ["unexpected"]}} =
+             Service.get_by_name(client, "demo", "web")
   end
 
   test "logs_by_name streams typed events" do

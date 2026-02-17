@@ -68,8 +68,8 @@ defmodule Sprites.Client do
     with {:ok, response_body} <-
            client.req
            |> HTTP.post(url: "/v1/sprites", json: body, receive_timeout: @create_timeout)
-           |> HTTP.unwrap_body() do
-      sprite_body = parse_sprite(response_body)
+           |> HTTP.unwrap_body(),
+         {:ok, sprite_body} <- normalize_sprite_body(response_body) do
       {:ok, Sprites.Sprite.new(client, name, sprite_body)}
     end
   end
@@ -126,8 +126,9 @@ defmodule Sprites.Client do
     with {:ok, body} <-
            client.req
            |> HTTP.get(url: "/v1/sprites", params: params)
-           |> HTTP.unwrap_body() do
-      {:ok, normalize_sprite_page(body)}
+           |> HTTP.unwrap_body(),
+         {:ok, normalized} <- normalize_sprite_page(body) do
+      {:ok, normalized}
     end
   end
 
@@ -139,8 +140,9 @@ defmodule Sprites.Client do
     with {:ok, body} <-
            client.req
            |> HTTP.get(url: "/v1/sprites/#{URI.encode(name)}")
-           |> HTTP.unwrap_body() do
-      {:ok, parse_sprite(body)}
+           |> HTTP.unwrap_body(),
+         {:ok, sprite} <- normalize_sprite_body(body) do
+      {:ok, sprite}
     end
   end
 
@@ -176,8 +178,9 @@ defmodule Sprites.Client do
     with {:ok, body} <-
            client.req
            |> HTTP.put(url: "/v1/sprites/#{URI.encode(name)}", json: settings)
-           |> HTTP.unwrap_body() do
-      {:ok, parse_sprite(body)}
+           |> HTTP.unwrap_body(),
+         {:ok, sprite} <- normalize_sprite_body(body) do
+      {:ok, sprite}
     end
   end
 
@@ -231,7 +234,8 @@ defmodule Sprites.Client do
     end
   end
 
-  defp parse_sprite(other), do: other
+  defp normalize_sprite_body(%{} = body), do: {:ok, parse_sprite(body)}
+  defp normalize_sprite_body(other), do: {:error, {:unexpected_response_shape, other}}
 
   defp normalize_sprite_page(%{"sprites" => sprites} = page) when is_list(sprites) do
     parsed_sprites = Enum.map(sprites, &parse_sprite_entry/1)
@@ -242,26 +246,23 @@ defmodule Sprites.Client do
         {:error, _reason} -> %{page | "sprites" => parsed_sprites}
       end
 
-    parsed_page
-    |> Map.put_new("has_more", false)
-    |> Map.put_new("next_continuation_token", nil)
+    {:ok,
+     parsed_page
+     |> Map.put_new("has_more", false)
+     |> Map.put_new("next_continuation_token", nil)}
   end
 
   defp normalize_sprite_page(list) when is_list(list) do
-    %{
-      "sprites" => Enum.map(list, &parse_sprite_entry/1),
-      "has_more" => false,
-      "next_continuation_token" => nil
-    }
+    {:ok,
+     %{
+       "sprites" => Enum.map(list, &parse_sprite_entry/1),
+       "has_more" => false,
+       "next_continuation_token" => nil
+     }}
   end
 
   defp normalize_sprite_page(other) do
-    %{
-      "sprites" => [],
-      "has_more" => false,
-      "next_continuation_token" => nil,
-      "raw" => other
-    }
+    {:error, {:unexpected_response_shape, other}}
   end
 
   defp parse_sprite_entry(entry) when is_map(entry) do

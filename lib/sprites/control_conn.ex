@@ -290,7 +290,7 @@ defmodule Sprites.ControlConn do
       {:ok, conn} ->
         case :gun.await_up(conn, 10_000) do
           {:ok, _protocol} ->
-            path = "#{uri.path}?#{uri.query || ""}"
+            path = ws_path(uri)
             headers = [{"authorization", "Bearer #{token}"}]
             stream_ref = :gun.ws_upgrade(conn, path, headers)
 
@@ -345,6 +345,16 @@ defmodule Sprites.ControlConn do
     after
       5_000 ->
         ""
+    end
+  end
+
+  defp ws_path(%URI{path: path, query: query}) do
+    request_path = path || "/"
+
+    if query in [nil, ""] do
+      request_path
+    else
+      request_path <> "?" <> query
     end
   end
 end

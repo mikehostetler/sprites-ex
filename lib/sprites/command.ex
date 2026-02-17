@@ -76,10 +76,15 @@ defmodule Sprites.Command do
   def run(sprite, command, args, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, :infinity)
     stderr_to_stdout = Keyword.get(opts, :stderr_to_stdout, false)
+    deadline = timeout_deadline(timeout)
 
     case start(sprite, command, args, opts) do
       {:ok, cmd} ->
-        collect_output(cmd, "", stderr_to_stdout, timeout)
+        try do
+          collect_output(cmd, [], stderr_to_stdout, deadline, timeout)
+        after
+          stop(cmd)
+        end
 
       {:error, reason} ->
         raise "Failed to start command: #{inspect(reason)}"
@@ -121,6 +126,18 @@ defmodule Sprites.Command do
   @spec resize(t(), pos_integer(), pos_integer()) :: :ok
   def resize(%__MODULE__{pid: pid}, rows, cols) do
     GenServer.cast(pid, {:resize, rows, cols})
+  end
+
+  @doc false
+  @spec stop(t()) :: :ok
+  def stop(%__MODULE__{pid: pid}) when is_pid(pid) do
+    if Process.alive?(pid) do
+      GenServer.stop(pid, :normal)
+    else
+      :ok
+    end
+  catch
+    :exit, _ -> :ok
   end
 
   # GenServer callbacks
@@ -285,7 +302,7 @@ defmodule Sprites.Command do
       {:ok, conn} ->
         case :gun.await_up(conn, 10_000) do
           {:ok, _protocol} ->
-            path = "#{uri.path}?#{uri.query || ""}"
+            path = ws_path(uri)
             headers = [{"authorization", "Bearer #{token}"}]
             stream_ref = :gun.ws_upgrade(conn, path, headers)
 
@@ -604,26 +621,27 @@ defmodule Sprites.Command do
     {:stop, :normal, state}
   end
 
-  defp collect_output(cmd, acc, stderr_to_stdout, timeout) do
+  defp collect_output(cmd, acc, stderr_to_stdout, deadline, timeout) do
     ref = cmd.ref
+    receive_timeout = remaining_timeout(deadline)
 
     receive do
       {:stdout, %{ref: ^ref}, data} ->
-        collect_output(cmd, acc <> data, stderr_to_stdout, timeout)
+        collect_output(cmd, [data | acc], stderr_to_stdout, deadline, timeout)
 
       {:stderr, %{ref: ^ref}, data} when stderr_to_stdout ->
-        collect_output(cmd, acc <> data, stderr_to_stdout, timeout)
+        collect_output(cmd, [data | acc], stderr_to_stdout, deadline, timeout)
 
       {:stderr, %{ref: ^ref}, _data} ->
-        collect_output(cmd, acc, stderr_to_stdout, timeout)
+        collect_output(cmd, acc, stderr_to_stdout, deadline, timeout)
 
       {:exit, %{ref: ^ref}, code} ->
-        {acc, code}
+        {acc |> Enum.reverse() |> IO.iodata_to_binary(), code}
 
       {:error, %{ref: ^ref}, reason} ->
         raise "Command failed: #{inspect(reason)}"
     after
-      timeout ->
+      receive_timeout ->
         raise Sprites.Error.TimeoutError, timeout: timeout
     end
   end
@@ -634,13 +652,18 @@ defmodule Sprites.Command do
   defp drain_pending_frames(%{conn: conn} = state) do
     receive do
       {:gun_ws, ^conn, _stream_ref, {:binary, data}} ->
-        {:noreply, state} = handle_binary_frame(data, state)
-        drain_pending_frames(state)
+        case handle_binary_frame(data, state) do
+          {:noreply, next_state} ->
+            drain_pending_frames(next_state)
+
+          {:stop, :normal, next_state} ->
+            next_state
+        end
 
       {:gun_ws, ^conn, _stream_ref, {:text, json}} ->
         case handle_text_frame(json, state) do
-          {:noreply, state} -> drain_pending_frames(state)
-          {:stop, :normal, state} -> state
+          {:noreply, next_state} -> drain_pending_frames(next_state)
+          {:stop, :normal, next_state} -> next_state
         end
     after
       0 -> state
@@ -649,8 +672,33 @@ defmodule Sprites.Command do
 
   defp drain_pending_frames(state), do: state
 
+  defp timeout_deadline(:infinity), do: :infinity
+
+  defp timeout_deadline(timeout) when is_integer(timeout) and timeout >= 0 do
+    System.monotonic_time(:millisecond) + timeout
+  end
+
+  defp timeout_deadline(_), do: System.monotonic_time(:millisecond)
+
+  defp remaining_timeout(:infinity), do: :infinity
+
+  defp remaining_timeout(deadline) do
+    remaining = deadline - System.monotonic_time(:millisecond)
+    max(remaining, 0)
+  end
+
   defp command_ref(%{command_handle: %__MODULE__{} = handle}), do: handle
   defp command_ref(%{ref: ref}), do: %{ref: ref}
+
+  defp ws_path(%URI{path: path, query: query}) do
+    request_path = path || "/"
+
+    if query in [nil, ""] do
+      request_path
+    else
+      request_path <> "?" <> query
+    end
+  end
 
   # Read the response body from a failed HTTP response
   defp read_response_body(_conn, _stream_ref, :fin), do: ""

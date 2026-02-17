@@ -117,8 +117,9 @@ defmodule Sprites.Policy do
     with {:ok, body} <-
            client.req
            |> HTTP.get(url: "/v1/sprites/#{URI.encode(name)}/policy/network")
-           |> HTTP.unwrap_body() do
-      {:ok, from_map(body)}
+           |> HTTP.unwrap_body(),
+         {:ok, policy} <- extract_policy(body) do
+      {:ok, policy}
     end
   end
 
@@ -154,4 +155,7 @@ defmodule Sprites.Policy do
       {:error, reason} -> {:error, reason}
     end
   end
+
+  defp extract_policy(%{} = policy), do: {:ok, from_map(policy)}
+  defp extract_policy(other), do: {:error, {:unexpected_response_shape, other}}
 end

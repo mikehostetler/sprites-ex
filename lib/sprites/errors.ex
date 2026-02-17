@@ -253,6 +253,10 @@ defmodule Sprites.Error do
       "File or directory not found: #{path}"
     end
 
+    def message(%{reason: %Sprites.Error.APIError{} = api_error, path: path}) do
+      "Filesystem error for #{path}: #{Exception.message(api_error)}"
+    end
+
     def message(%{reason: {:api_error, status, body}, path: path}) do
       "Filesystem error (#{status}) for #{path}: #{inspect(body)}"
     end

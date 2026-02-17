@@ -67,4 +67,18 @@ defmodule Sprites.NDJSONStreamTest do
                Map.take(event, ["type", "message"])
              end)
   end
+
+  test "request returns explicit status tuple when parser yields nil error payload" do
+    {:ok, server} =
+      TestHTTPServer.start_once(fn socket, _request ->
+        :ok = TestHTTPServer.send_text(socket, 304, "not modified")
+      end)
+
+    client = Client.new("token", base_url: "http://127.0.0.1:#{server.port}")
+
+    assert {:error, {:http_status, 304, body}} =
+             NDJSONStream.request(client, :get, "/cached", parser: & &1)
+
+    assert body in ["", "not modified"]
+  end
 end

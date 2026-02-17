@@ -74,8 +74,10 @@ defmodule Sprites.Stream do
     :ok
   end
 
-  defp cleanup({:running, _cmd}) do
-    # Command may still be running, but we're done consuming
+  defp cleanup({:running, cmd}) do
+    # Stop the command if the consumer halted early.
+    # This prevents leaked remote executions when callers use take/first.
+    Sprites.Command.stop(cmd)
     :ok
   end
 

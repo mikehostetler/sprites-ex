@@ -32,14 +32,6 @@ defmodule Sprites.Sprite do
   end
 
   @doc """
-  Destroys this sprite.
-  """
-  @spec destroy(t()) :: :ok | {:error, term()}
-  def destroy(%__MODULE__{client: client, name: name}) do
-    Sprites.Client.delete_sprite(client, name)
-  end
-
-  @doc """
   Builds the WebSocket URL for command execution.
   """
   @spec exec_url(t(), String.t(), [String.t()], keyword()) :: String.t()

@@ -68,6 +68,18 @@ defmodule Sprites.ClientTest do
     assert {"continuation_token", "abc"} in decoded
   end
 
+  test "list_sprites_page returns shape error for unexpected payload" do
+    fake = fn request ->
+      response = %Req.Response{status: 200, body: %{"unexpected" => true}, headers: []}
+      {request, response}
+    end
+
+    client = client_with_adapter(fake)
+
+    assert {:error, {:unexpected_response_shape, %{"unexpected" => true}}} =
+             Client.list_sprites_page(client)
+  end
+
   test "exec_http builds cmd/env query and forwards stdin body" do
     parent = self()
 
@@ -148,5 +160,41 @@ defmodule Sprites.ClientTest do
     assert_receive {:request, request}
     assert request.method == :post
     assert request.url.path == "/v1/sprites"
+  end
+
+  test "create_sprite returns shape error for unexpected payload" do
+    fake = fn request ->
+      response = %Req.Response{status: 201, body: ["unexpected"], headers: []}
+      {request, response}
+    end
+
+    client = client_with_adapter(fake)
+
+    assert {:error, {:unexpected_response_shape, ["unexpected"]}} =
+             Client.create_sprite(client, "demo")
+  end
+
+  test "get_sprite returns shape error for unexpected payload" do
+    fake = fn request ->
+      response = %Req.Response{status: 200, body: ["unexpected"], headers: []}
+      {request, response}
+    end
+
+    client = client_with_adapter(fake)
+
+    assert {:error, {:unexpected_response_shape, ["unexpected"]}} =
+             Client.get_sprite(client, "demo")
+  end
+
+  test "update_sprite returns shape error for unexpected payload" do
+    fake = fn request ->
+      response = %Req.Response{status: 200, body: ["unexpected"], headers: []}
+      {request, response}
+    end
+
+    client = client_with_adapter(fake)
+
+    assert {:error, {:unexpected_response_shape, ["unexpected"]}} =
+             Client.update_sprite(client, "demo", %{"config" => %{}})
   end
 end

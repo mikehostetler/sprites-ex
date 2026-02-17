@@ -4,7 +4,8 @@ Elixir SDK for Sprites - a code container runtime for interactive development.
 
 ## Installation
 
-Add `sprites` to your list of dependencies in `mix.exs`:
+Add `sprites` to your list of dependencies in `mix.exs`.
+The package is not currently published on Hex, so use a Git dependency:
 
 ```elixir
 def deps do
