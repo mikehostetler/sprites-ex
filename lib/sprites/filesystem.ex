@@ -438,7 +438,7 @@ defmodule Sprites.Filesystem do
       workingDir: fs.working_dir
     }
 
-    case Req.post(fs.sprite.client.req, url: "/fs/rename", json: body) do
+    case Req.post(fs.sprite.client.req, url: build_url(fs, "/fs/rename", []), json: body) do
       {:ok, %{status: status}} when status in 200..299 ->
         :ok
 
@@ -491,7 +491,7 @@ defmodule Sprites.Filesystem do
       recursive: recursive
     }
 
-    case Req.post(fs.sprite.client.req, url: "/fs/copy", json: body) do
+    case Req.post(fs.sprite.client.req, url: build_url(fs, "/fs/copy", []), json: body) do
       {:ok, %{status: status}} when status in 200..299 ->
         :ok
 
@@ -543,7 +543,7 @@ defmodule Sprites.Filesystem do
       recursive: recursive
     }
 
-    case Req.post(fs.sprite.client.req, url: "/fs/chmod", json: body) do
+    case Req.post(fs.sprite.client.req, url: build_url(fs, "/fs/chmod", []), json: body) do
       {:ok, %{status: status}} when status in 200..299 ->
         :ok
 

@@ -3,7 +3,7 @@ defmodule Sprites.Policy do
   Network policy management for sprites.
   """
 
-  alias Sprites.{Client, Sprite}
+  alias Sprites.{Client, Sprite, HTTP, Shapes}
 
   defmodule Rule do
     @moduledoc """
@@ -14,24 +14,33 @@ defmodule Sprites.Policy do
       * `:domain` - Domain to match (e.g., "example.com")
       * `:action` - Action to take: "allow" or "deny"
       * `:include` - Optional include pattern for wildcard matching
+      * `:raw` - Original API response map
     """
     @type t :: %__MODULE__{
             domain: String.t() | nil,
             action: String.t() | nil,
-            include: String.t() | nil
+            include: String.t() | nil,
+            raw: map() | nil
           }
 
-    defstruct [:domain, :action, :include]
+    defstruct [:domain, :action, :include, :raw]
 
     @doc """
     Creates a rule from a map.
     """
     @spec from_map(map()) :: t()
     def from_map(map) when is_map(map) do
+      parsed =
+        case Shapes.parse_policy_rule(map) do
+          {:ok, parsed} -> parsed
+          {:error, _reason} -> map
+        end
+
       %__MODULE__{
-        domain: Map.get(map, "domain") || Map.get(map, :domain),
-        action: Map.get(map, "action") || Map.get(map, :action),
-        include: Map.get(map, "include") || Map.get(map, :include)
+        domain: Map.get(parsed, "domain") || Map.get(parsed, :domain),
+        action: Map.get(parsed, "action") || Map.get(parsed, :action),
+        include: Map.get(parsed, "include") || Map.get(parsed, :include),
+        raw: map
       }
     end
 
@@ -56,21 +65,28 @@ defmodule Sprites.Policy do
   ## Fields
 
     * `:rules` - List of `Sprites.Policy.Rule` structs
+    * `:raw` - Original API response map
   """
-  @type t :: %__MODULE__{rules: [Rule.t()]}
+  @type t :: %__MODULE__{rules: [Rule.t()], raw: map() | nil}
 
-  defstruct rules: []
+  defstruct rules: [], raw: nil
 
   @doc """
   Creates a network policy from a map.
   """
   @spec from_map(map()) :: t()
   def from_map(map) when is_map(map) do
+    parsed =
+      case Shapes.parse_policy(map) do
+        {:ok, parsed} -> parsed
+        {:error, _reason} -> map
+      end
+
     rules =
-      (Map.get(map, "rules") || Map.get(map, :rules) || [])
+      (Map.get(parsed, "rules") || Map.get(parsed, :rules) || [])
       |> Enum.map(&Rule.from_map/1)
 
-    %__MODULE__{rules: rules}
+    %__MODULE__{rules: rules, raw: map}
   end
 
   @doc """
@@ -98,15 +114,11 @@ defmodule Sprites.Policy do
   """
   @spec get_by_name(Client.t(), String.t()) :: {:ok, t()} | {:error, term()}
   def get_by_name(%Client{} = client, name) when is_binary(name) do
-    case Req.get(client.req, url: "/v1/sprites/#{URI.encode(name)}/policy/network") do
-      {:ok, %{status: status, body: body}} when status in 200..299 ->
-        {:ok, from_map(body)}
-
-      {:ok, %{status: status, body: body}} ->
-        {:error, {:api_error, status, body}}
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, body} <-
+           client.req
+           |> HTTP.get(url: "/v1/sprites/#{URI.encode(name)}/policy/network")
+           |> HTTP.unwrap_body() do
+      {:ok, from_map(body)}
     end
   end
 
@@ -135,18 +147,11 @@ defmodule Sprites.Policy do
   def update_by_name(%Client{} = client, name, %__MODULE__{} = policy) when is_binary(name) do
     body = to_map(policy)
 
-    case Req.post(client.req, url: "/v1/sprites/#{URI.encode(name)}/policy/network", json: body) do
-      {:ok, %{status: 204}} ->
-        :ok
-
-      {:ok, %{status: 400, body: body}} ->
-        {:error, {:invalid_policy, body}}
-
-      {:ok, %{status: status, body: body}} ->
-        {:error, {:api_error, status, body}}
-
-      {:error, reason} ->
-        {:error, reason}
+    case client.req
+         |> HTTP.post(url: "/v1/sprites/#{URI.encode(name)}/policy/network", json: body)
+         |> HTTP.unwrap(200..299) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
     end
   end
 end
