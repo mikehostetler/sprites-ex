@@ -22,20 +22,24 @@ defmodule Sprites.Stream do
 
   ## Options
 
-  Same as `Sprites.spawn/4`.
+  Same as `Sprites.spawn/4`, plus:
+
+    * `:idle_timeout` - Max idle wait for the next event in milliseconds (default: `:infinity`)
   """
   @spec new(Sprites.Sprite.t(), String.t(), [String.t()], keyword()) :: Enumerable.t()
   def new(sprite, command, args, opts) do
+    idle_timeout = Keyword.get(opts, :idle_timeout, :infinity)
+
     Stream.resource(
-      fn -> start_command(sprite, command, args, opts) end,
+      fn -> start_command(sprite, command, args, opts, idle_timeout) end,
       &next_chunk/1,
       &cleanup/1
     )
   end
 
-  defp start_command(sprite, command, args, opts) do
-    case Sprites.Command.start(sprite, command, args, opts) do
-      {:ok, cmd} -> {:running, cmd}
+  defp start_command(sprite, command, args, opts, idle_timeout) do
+    case command_module().start(sprite, command, args, opts) do
+      {:ok, cmd} -> {:running, cmd, idle_timeout}
       {:error, reason} -> {:error, reason}
     end
   end
@@ -44,44 +48,49 @@ defmodule Sprites.Stream do
     raise "Stream error: #{inspect(reason)}"
   end
 
-  defp next_chunk({:done, cmd}) do
-    {:halt, {:done, cmd}}
+  defp next_chunk({:done, cmd, idle_timeout}) do
+    {:halt, {:done, cmd, idle_timeout}}
   end
 
-  defp next_chunk({:running, cmd}) do
+  defp next_chunk({:running, cmd, idle_timeout}) do
     ref = cmd.ref
 
     receive do
       {:stdout, %{ref: ^ref}, data} ->
-        {[data], {:running, cmd}}
+        {[data], {:running, cmd, idle_timeout}}
 
       {:stderr, %{ref: ^ref}, _data} ->
         # Skip stderr in stream mode
-        {[], {:running, cmd}}
+        {[], {:running, cmd, idle_timeout}}
 
       {:exit, %{ref: ^ref}, _code} ->
-        {:halt, {:done, cmd}}
+        {:halt, {:done, cmd, idle_timeout}}
 
       {:error, %{ref: ^ref}, reason} ->
+        command_module().stop(cmd)
         raise "Stream error: #{inspect(reason)}"
     after
-      60_000 ->
-        {:halt, {:done, cmd}}
+      idle_timeout ->
+        {:halt, {:running, cmd, idle_timeout}}
     end
   end
 
-  defp cleanup({:done, _cmd}) do
+  defp cleanup({:done, _cmd, _idle_timeout}) do
     :ok
   end
 
-  defp cleanup({:running, cmd}) do
+  defp cleanup({:running, cmd, _idle_timeout}) do
     # Stop the command if the consumer halted early.
     # This prevents leaked remote executions when callers use take/first.
-    Sprites.Command.stop(cmd)
+    command_module().stop(cmd)
     :ok
   end
 
   defp cleanup({:error, _reason}) do
     :ok
+  end
+
+  defp command_module do
+    Application.get_env(:sprites, :command_module, Sprites.Command)
   end
 end

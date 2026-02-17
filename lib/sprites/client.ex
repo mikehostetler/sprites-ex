@@ -14,7 +14,7 @@ defmodule Sprites.Client do
   @type t :: %__MODULE__{
           token: String.t(),
           base_url: String.t(),
-          timeout: non_neg_integer(),
+          timeout: pos_integer(),
           req: Req.Request.t(),
           control_mode: boolean()
         }
@@ -27,12 +27,15 @@ defmodule Sprites.Client do
     * `:base_url` - API base URL (default: "https://api.sprites.dev")
     * `:timeout` - HTTP timeout in milliseconds (default: 30_000)
     * `:control_mode` - Enable control mode for multiplexed exec over a single WebSocket (default: false)
+
+  Raises `ArgumentError` for invalid token/base URL/options.
   """
   @spec new(String.t(), keyword()) :: t()
   def new(token, opts \\ []) do
-    base_url = Keyword.get(opts, :base_url, @default_base_url) |> normalize_url()
-    timeout = Keyword.get(opts, :timeout, @default_timeout)
-    control_mode = Keyword.get(opts, :control_mode, false)
+    token = validate_token(token)
+    base_url = opts |> Keyword.get(:base_url, @default_base_url) |> normalize_url()
+    timeout = opts |> Keyword.get(:timeout, @default_timeout) |> validate_timeout()
+    control_mode = opts |> Keyword.get(:control_mode, false) |> validate_control_mode()
 
     req =
       Req.new(
@@ -301,10 +304,46 @@ defmodule Sprites.Client do
   defp maybe_put_req_body(opts, nil), do: opts
   defp maybe_put_req_body(opts, data), do: Keyword.put(opts, :body, IO.iodata_to_binary(data))
 
-  defp normalize_url(url) do
-    String.trim_trailing(url, "/")
+  defp normalize_url(url) when is_binary(url) do
+    trimmed = String.trim_trailing(url, "/")
+    uri = URI.parse(trimmed)
+
+    if uri.scheme in ["http", "https"] and is_binary(uri.host) and uri.host != "" and
+         is_nil(uri.query) and is_nil(uri.fragment) do
+      trimmed
+    else
+      raise ArgumentError,
+            "invalid :base_url #{inspect(url)}; expected an absolute http(s) URL like \"https://api.sprites.dev\""
+    end
+  end
+
+  defp normalize_url(other) do
+    raise ArgumentError, ":base_url must be a string URL, got: #{inspect(other)}"
   end
 
   defp bool_param(true), do: "true"
   defp bool_param(false), do: "false"
+
+  defp validate_token(token) when is_binary(token) do
+    if String.trim(token) == "" do
+      raise ArgumentError, "token must be a non-empty string"
+    else
+      token
+    end
+  end
+
+  defp validate_token(_other), do: raise(ArgumentError, "token must be a string")
+
+  defp validate_timeout(timeout) when is_integer(timeout) and timeout > 0, do: timeout
+
+  defp validate_timeout(other) do
+    raise ArgumentError,
+          ":timeout must be a positive integer in milliseconds, got: #{inspect(other)}"
+  end
+
+  defp validate_control_mode(control_mode) when is_boolean(control_mode), do: control_mode
+
+  defp validate_control_mode(other) do
+    raise ArgumentError, ":control_mode must be a boolean, got: #{inspect(other)}"
+  end
 end

@@ -19,6 +19,37 @@ defmodule Sprites.ClientTest do
     %{client | req: req}
   end
 
+  test "new validates token and options" do
+    assert_raise ArgumentError, ~r/token must be a non-empty string/, fn ->
+      Client.new("  ")
+    end
+
+    assert_raise ArgumentError, ~r/invalid :base_url/, fn ->
+      Client.new("token", base_url: "sprites.dev")
+    end
+
+    assert_raise ArgumentError, ~r/:base_url must be a string URL/, fn ->
+      Client.new("token", base_url: 123)
+    end
+
+    assert_raise ArgumentError, ~r/invalid :base_url/, fn ->
+      Client.new("token", base_url: "https://api.sprites.dev?foo=bar")
+    end
+
+    assert_raise ArgumentError, ~r/:timeout must be a positive integer/, fn ->
+      Client.new("token", timeout: 0)
+    end
+
+    assert_raise ArgumentError, ~r/:control_mode must be a boolean/, fn ->
+      Client.new("token", control_mode: :yes)
+    end
+  end
+
+  test "new trims trailing slash from base_url" do
+    client = Client.new("token", base_url: "https://api.sprites.dev/")
+    assert client.base_url == "https://api.sprites.dev"
+  end
+
   test "list_sprites_page normalizes legacy array response" do
     fake = fn request ->
       response = %Req.Response{status: 200, body: [%{"name" => "demo"}], headers: []}

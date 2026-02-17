@@ -236,6 +236,11 @@ defmodule Sprites do
 
   Useful for processing command output lazily.
 
+  ## Options
+
+    * Same as `Sprites.spawn/4`
+    * `:idle_timeout` - Max idle wait for next event in milliseconds (default: `:infinity`)
+
   ## Examples
 
       sprite
