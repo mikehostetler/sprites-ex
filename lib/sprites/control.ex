@@ -16,59 +16,8 @@ defmodule Sprites.Control do
   """
   @spec ensure_tables() :: :ok
   def ensure_tables do
-    if :ets.whereis(@pools_table) == :undefined or
-         :ets.whereis(@support_table) == :undefined do
-      # Tables must be owned by a long-lived process so they survive
-      # across short-lived Command GenServers.
-      ensure_table_owner()
-    end
-
+    :ok = Sprites.Control.TableOwner.ensure_started()
     :ok
-  end
-
-  defp ensure_table_owner do
-    name = :sprites_control_table_owner
-
-    case Process.whereis(name) do
-      nil ->
-        caller = self()
-
-        pid =
-          spawn(fn ->
-            if :ets.whereis(@pools_table) == :undefined do
-              :ets.new(@pools_table, [:named_table, :public, :set])
-            end
-
-            if :ets.whereis(@support_table) == :undefined do
-              :ets.new(@support_table, [:named_table, :public, :set])
-            end
-
-            send(caller, {:tables_ready, self()})
-
-            # Stay alive forever — tables die when their owner dies
-            ref = make_ref()
-
-            receive do
-              ^ref -> :ok
-            end
-          end)
-
-        try do
-          Process.register(pid, name)
-        rescue
-          ArgumentError ->
-            Process.exit(pid, :normal)
-        end
-
-        receive do
-          {:tables_ready, ^pid} -> :ok
-        after
-          5_000 -> :ok
-        end
-
-      _pid ->
-        :ok
-    end
   end
 
   @doc """
@@ -79,8 +28,11 @@ defmodule Sprites.Control do
   @spec checkout(Sprite.t()) :: {:ok, pid()} | {:error, term()}
   def checkout(%Sprite{} = sprite) do
     ensure_tables()
-    pool = get_or_create_pool(sprite)
-    ControlPool.checkout(pool)
+
+    with {:ok, pool} <- get_or_create_pool(sprite),
+         {:ok, conn_pid} <- checkout_pool(sprite, pool, 0) do
+      {:ok, conn_pid}
+    end
   end
 
   @doc """
@@ -93,7 +45,7 @@ defmodule Sprites.Control do
 
     case :ets.lookup(@pools_table, key) do
       [{^key, pool}] ->
-        ControlPool.checkin(pool, conn_pid)
+        pool_module().checkin(pool, conn_pid)
 
       [] ->
         :ok
@@ -139,7 +91,7 @@ defmodule Sprites.Control do
 
     case :ets.lookup(@pools_table, key) do
       [{^key, pool}] ->
-        ControlPool.close(pool)
+        pool_module().close(pool)
         :ets.delete(@pools_table, key)
 
       [] ->
@@ -151,29 +103,96 @@ defmodule Sprites.Control do
 
   # Private helpers
 
+  @spec get_or_create_pool(Sprite.t()) :: {:ok, pid()} | {:error, term()}
   defp get_or_create_pool(sprite) do
     key = sprite_key(sprite)
 
-    case :ets.lookup(@pools_table, key) do
-      [{^key, pool}] ->
-        if Process.alive?(pool) do
-          pool
-        else
-          create_pool(sprite, key)
-        end
+    case lookup_pool(key) do
+      {:ok, pool} ->
+        {:ok, pool}
 
-      [] ->
-        create_pool(sprite, key)
+      :not_found ->
+        :global.trans(
+          {{__MODULE__, key}, self()},
+          fn ->
+            case lookup_pool(key) do
+              {:ok, pool} -> {:ok, pool}
+              :not_found -> create_pool(sprite, key)
+            end
+          end,
+          [node()]
+        )
     end
   end
 
+  @spec create_pool(Sprite.t(), term()) :: {:ok, pid()} | {:error, term()}
   defp create_pool(sprite, key) do
     url = Sprite.control_url(sprite)
     token = Sprite.token(sprite)
 
-    {:ok, pool} = ControlPool.start(url: url, token: token)
-    :ets.insert(@pools_table, {key, pool})
-    pool
+    with {:ok, pool} <- pool_module().start(url: url, token: token) do
+      true = :ets.insert(@pools_table, {key, pool})
+      {:ok, pool}
+    end
+  end
+
+  @spec lookup_pool(term()) :: {:ok, pid()} | :not_found
+  defp lookup_pool(key) do
+    case :ets.lookup(@pools_table, key) do
+      [{^key, pool}] when is_pid(pool) ->
+        if Process.alive?(pool) do
+          {:ok, pool}
+        else
+          :ets.delete(@pools_table, key)
+          :not_found
+        end
+
+      _ ->
+        :not_found
+    end
+  end
+
+  @spec checkout_pool(Sprite.t(), pid(), non_neg_integer()) :: {:ok, pid()} | {:error, term()}
+  defp checkout_pool(sprite, pool, attempt) do
+    case safe_pool_checkout(pool) do
+      {:ok, conn_pid} ->
+        {:ok, conn_pid}
+
+      {:error, reason} ->
+        if attempt == 0 and retryable_checkout_error?(reason) do
+          :ets.delete(@pools_table, sprite_key(sprite))
+
+          with {:ok, new_pool} <- get_or_create_pool(sprite) do
+            checkout_pool(sprite, new_pool, 1)
+          end
+        else
+          {:error, reason}
+        end
+    end
+  end
+
+  @spec safe_pool_checkout(pid()) :: {:ok, pid()} | {:error, term()}
+  defp safe_pool_checkout(pool) do
+    try do
+      pool_module().checkout(pool)
+    catch
+      :exit, reason -> {:error, {:checkout_exit, reason}}
+    end
+  end
+
+  defp retryable_checkout_error?({:checkout_exit, reason}), do: stale_pool_exit?(reason)
+  defp retryable_checkout_error?(_), do: false
+
+  defp stale_pool_exit?(reason) do
+    match?(:noproc, reason) or
+      match?({:noproc, _}, reason) or
+      match?({{:noproc, _}, _}, reason) or
+      match?({:shutdown, {:noproc, _}}, reason) or
+      match?({:shutdown, {{:noproc, _}, _}}, reason)
+  end
+
+  defp pool_module do
+    Application.get_env(:sprites, :control_pool_module, ControlPool)
   end
 
   defp sprite_key(%Sprite{name: name, client: client}) do
