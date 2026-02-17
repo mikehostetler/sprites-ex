@@ -226,6 +226,13 @@ defmodule Sprites.ControlConn do
 
         {:noreply, %{state | op_active: false}}
 
+      {:ok, %{"type" => "op.complete", "args" => %{"exit_code" => exit_code}}} ->
+        if state.owner do
+          send(state.owner, {:control_op_complete, exit_code})
+        end
+
+        {:noreply, %{state | op_active: false}}
+
       {:ok, %{"type" => "op.complete"}} ->
         if state.owner do
           send(state.owner, {:control_op_complete, 0})
@@ -234,6 +241,13 @@ defmodule Sprites.ControlConn do
         {:noreply, %{state | op_active: false}}
 
       {:ok, %{"type" => "op.error", "args" => %{"error" => error}}} ->
+        if state.owner do
+          send(state.owner, {:control_op_error, error})
+        end
+
+        {:noreply, %{state | op_active: false}}
+
+      {:ok, %{"type" => "op.error", "args" => %{"message" => error}}} ->
         if state.owner do
           send(state.owner, {:control_op_error, error})
         end

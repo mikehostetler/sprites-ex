@@ -2,10 +2,11 @@ defmodule Sprites.Session do
   @moduledoc """
   Session management for sprites.
 
-  Sessions represent active command executions that can be listed and attached to.
+  Sessions represent active command executions that can be listed, attached to,
+  and explicitly terminated.
   """
 
-  alias Sprites.{Client, Sprite}
+  alias Sprites.{Client, Sprite, HTTP, NDJSONStream, Shapes, StreamMessage}
 
   @doc """
   Represents an active execution session.
@@ -20,16 +21,18 @@ defmodule Sprites.Session do
     * `:is_active` - Whether the session is currently active
     * `:last_activity` - Time of last activity (DateTime)
     * `:tty` - Whether TTY is enabled
+    * `:raw` - Original API response map
   """
   @type t :: %__MODULE__{
-          id: String.t(),
+          id: String.t() | integer(),
           command: String.t(),
           workdir: String.t() | nil,
           created: DateTime.t() | nil,
           bytes_per_second: float(),
           is_active: boolean(),
           last_activity: DateTime.t() | nil,
-          tty: boolean()
+          tty: boolean(),
+          raw: map() | nil
         }
 
   defstruct [
@@ -38,6 +41,7 @@ defmodule Sprites.Session do
     :workdir,
     :created,
     :last_activity,
+    :raw,
     bytes_per_second: 0.0,
     is_active: false,
     tty: false
@@ -60,7 +64,8 @@ defmodule Sprites.Session do
         Map.get(map, "bytes_per_second") || Map.get(map, :bytes_per_second) || 0.0,
       is_active: Map.get(map, "is_active") || Map.get(map, :is_active) || false,
       last_activity: last_activity,
-      tty: Map.get(map, "tty") || Map.get(map, :tty) || false
+      tty: Map.get(map, "tty") || Map.get(map, :tty) || false,
+      raw: map
     }
   end
 
@@ -92,20 +97,63 @@ defmodule Sprites.Session do
   """
   @spec list_by_name(Client.t(), String.t()) :: {:ok, [t()]} | {:error, term()}
   def list_by_name(%Client{} = client, name) when is_binary(name) do
-    case Req.get(client.req, url: "/v1/sprites/#{URI.encode(name)}/exec") do
-      {:ok, %{status: status, body: body}} when status in 200..299 ->
-        sessions =
-          (Map.get(body, "sessions") || [])
-          |> Enum.map(&from_map/1)
+    with {:ok, body} <-
+           client.req
+           |> HTTP.get(url: "/v1/sprites/#{URI.encode(name)}/exec")
+           |> HTTP.unwrap_body() do
+      sessions =
+        case body do
+          %{"sessions" => list} when is_list(list) -> list
+          list when is_list(list) -> list
+          _ -> []
+        end
 
-        {:ok, sessions}
+      parsed_sessions =
+        Enum.map(sessions, fn session ->
+          case Shapes.parse_session(session) do
+            {:ok, parsed} -> from_map(parsed)
+            {:error, _reason} -> from_map(session)
+          end
+        end)
 
-      {:ok, %{status: status, body: body}} ->
-        {:error, {:api_error, status, body}}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, parsed_sessions}
     end
+  end
+
+  @doc """
+  Kills an active session for a sprite.
+
+  Returns an NDJSON event stream describing kill progress.
+
+  ## Options
+
+    * `:signal` - Signal name (for example "SIGTERM")
+    * `:timeout` - Wait duration (for example "10s")
+  """
+  @spec kill(Sprite.t(), String.t() | integer(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, term()}
+  def kill(%Sprite{client: client, name: name}, session_id, opts \\ []) do
+    kill_by_name(client, name, session_id, opts)
+  end
+
+  @doc """
+  Kills an active session by sprite name and session ID.
+  """
+  @spec kill_by_name(Client.t(), String.t(), String.t() | integer(), keyword()) ::
+          {:ok, Enumerable.t()} | {:error, term()}
+  def kill_by_name(%Client{} = client, name, session_id, opts \\ []) when is_binary(name) do
+    params =
+      []
+      |> maybe_put_param(:signal, Keyword.get(opts, :signal))
+      |> maybe_put_param(:timeout, Keyword.get(opts, :timeout))
+
+    NDJSONStream.request(
+      client,
+      :post,
+      "/v1/sprites/#{URI.encode(name)}/exec/#{URI.encode(to_string(session_id))}/kill",
+      params: params,
+      parser: &parse_kill_event/1
+    )
   end
 
   @doc """
@@ -135,4 +183,14 @@ defmodule Sprites.Session do
   def get_activity_age(%__MODULE__{last_activity: last_activity}) do
     DateTime.diff(DateTime.utc_now(), last_activity, :second)
   end
+
+  defp parse_kill_event(event) do
+    case Shapes.parse_exec_kill_event(event) do
+      {:ok, parsed} -> StreamMessage.from_map(parsed, event)
+      {:error, _reason} -> StreamMessage.from_map(event, event)
+    end
+  end
+
+  defp maybe_put_param(params, _key, nil), do: params
+  defp maybe_put_param(params, key, value), do: params ++ [{key, value}]
 end

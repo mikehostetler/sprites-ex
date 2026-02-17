@@ -130,6 +130,7 @@ defmodule Sprites.Command do
     tty_mode = Keyword.get(opts, :tty, false)
     token = Sprite.token(sprite)
     stdin = Keyword.get(opts, :stdin, false)
+    attach_session? = Keyword.get(opts, :session_id) != nil
 
     base_state = %{
       owner: owner,
@@ -141,10 +142,17 @@ defmodule Sprites.Command do
       token: token,
       sprite: sprite,
       using_control: false,
-      control_conn: nil
+      control_conn: nil,
+      command_handle: %__MODULE__{
+        ref: ref,
+        pid: self(),
+        sprite: sprite,
+        owner: owner,
+        tty_mode: tty_mode
+      }
     }
 
-    if Sprite.control_mode?(sprite) and Control.control_supported?(sprite) do
+    if not attach_session? and Sprite.control_mode?(sprite) and Control.control_supported?(sprite) do
       case try_control_connect(sprite, command, args, opts, stdin, base_state) do
         {:ok, state} ->
           {:ok, state}
@@ -216,7 +224,32 @@ defmodule Sprites.Command do
   end
 
   defp do_direct_init(sprite, command, args, opts, token, state) do
-    url = Sprite.exec_url(sprite, command, args, opts)
+    case Keyword.get(opts, :session_id) do
+      nil ->
+        connect_direct_url(Sprite.exec_url(sprite, command, args, opts), token, state)
+
+      session_id ->
+        attach_url = Sprite.attach_url(sprite, session_id, opts)
+
+        case connect_direct_url(attach_url, token, state) do
+          {:ok, _state} = ok ->
+            ok
+
+          {:stop, %Error.APIError{status: 404}} ->
+            # Compatibility fallback for older API shape:
+            # /exec?session_id=... instead of /exec/{session_id}
+            connect_direct_url(Sprite.legacy_attach_url(sprite, session_id, opts), token, state)
+
+          {:stop, {:upgrade_failed, 404}} ->
+            connect_direct_url(Sprite.legacy_attach_url(sprite, session_id, opts), token, state)
+
+          {:stop, _reason} = error ->
+            error
+        end
+    end
+  end
+
+  defp connect_direct_url(url, token, state) do
     state = Map.put(state, :url, url)
 
     case do_connect(url, token) do
@@ -316,13 +349,12 @@ defmodule Sprites.Command do
 
   def handle_info(
         {:control_op_complete, exit_code},
-        %{using_control: true, owner: owner, ref: ref, sprite: sprite, control_conn: conn_pid} =
-          state
+        %{using_control: true, owner: owner, sprite: sprite, control_conn: conn_pid} = state
       ) do
     # In control mode, op.complete is the authoritative signal.
     # If we haven't already sent an exit message (from exit stream), send now.
     if state.exit_code == nil do
-      send(owner, {:exit, %{ref: ref}, exit_code})
+      send(owner, {:exit, command_ref(state), exit_code})
     end
 
     Control.checkin(sprite, conn_pid)
@@ -331,10 +363,9 @@ defmodule Sprites.Command do
 
   def handle_info(
         {:control_op_error, reason},
-        %{using_control: true, owner: owner, ref: ref, sprite: sprite, control_conn: conn_pid} =
-          state
+        %{using_control: true, owner: owner, sprite: sprite, control_conn: conn_pid} = state
       ) do
-    send(owner, {:error, %{ref: ref}, reason})
+    send(owner, {:error, command_ref(state), reason})
     Control.checkin(sprite, conn_pid)
     {:stop, :normal, %{state | control_conn: nil}}
   end
@@ -362,7 +393,7 @@ defmodule Sprites.Command do
 
       if state.exit_code == nil do
         # Still no exit code after draining — report as error
-        send(state.owner, {:error, %{ref: state.ref}, reason})
+        send(state.owner, {:error, command_ref(state), reason})
       end
     end
 
@@ -370,12 +401,12 @@ defmodule Sprites.Command do
   end
 
   def handle_info({:gun_error, conn, _stream_ref, reason}, %{conn: conn} = state) do
-    send(state.owner, {:error, %{ref: state.ref}, reason})
+    send(state.owner, {:error, command_ref(state), reason})
     {:stop, :normal, state}
   end
 
   def handle_info({:gun_error, conn, reason}, %{conn: conn} = state) do
-    send(state.owner, {:error, %{ref: state.ref}, reason})
+    send(state.owner, {:error, command_ref(state), reason})
     {:stop, :normal, state}
   end
 
@@ -476,29 +507,29 @@ defmodule Sprites.Command do
 
   # Private helpers
 
-  defp handle_binary_frame(data, %{tty_mode: true, owner: owner, ref: ref} = state) do
-    send(owner, {:stdout, %{ref: ref}, data})
+  defp handle_binary_frame(data, %{tty_mode: true, owner: owner} = state) do
+    send(owner, {:stdout, command_ref(state), data})
     {:noreply, state}
   end
 
-  defp handle_binary_frame(data, %{tty_mode: false, owner: owner, ref: ref} = state) do
+  defp handle_binary_frame(data, %{tty_mode: false, owner: owner} = state) do
     case Protocol.decode(data) do
       {:stdout, payload} ->
-        send(owner, {:stdout, %{ref: ref}, payload})
+        send(owner, {:stdout, command_ref(state), payload})
         {:noreply, state}
 
       {:stderr, payload} ->
-        send(owner, {:stderr, %{ref: ref}, payload})
+        send(owner, {:stderr, command_ref(state), payload})
         {:noreply, state}
 
       {:exit, code} ->
         if state.using_control do
           # In control mode, store exit code but DON'T stop.
           # Wait for op.complete to ensure proper sequencing.
-          send(owner, {:exit, %{ref: ref}, code})
+          send(owner, {:exit, command_ref(state), code})
           {:noreply, %{state | exit_code: code}}
         else
-          send(owner, {:exit, %{ref: ref}, code})
+          send(owner, {:exit, command_ref(state), code})
 
           if state.conn do
             :gun.ws_send(state.conn, state.stream_ref, :close)
@@ -515,18 +546,36 @@ defmodule Sprites.Command do
     end
   end
 
-  defp handle_text_frame(json, %{owner: owner, ref: ref} = state) do
+  defp handle_text_frame(json, %{owner: owner} = state) do
     case Jason.decode(json) do
       {:ok, %{"type" => "port", "port" => port}} ->
-        send(owner, {:port, %{ref: ref}, port})
+        send(owner, {:port, command_ref(state), port})
+        {:noreply, state}
+
+      {:ok, %{"type" => "port_opened", "port" => port}} ->
+        send(owner, {:port, command_ref(state), port})
         {:noreply, state}
 
       {:ok, %{"type" => "exit", "code" => code}} ->
         if state.using_control do
-          send(owner, {:exit, %{ref: ref}, code})
+          send(owner, {:exit, command_ref(state), code})
           {:noreply, %{state | exit_code: code}}
         else
-          send(owner, {:exit, %{ref: ref}, code})
+          send(owner, {:exit, command_ref(state), code})
+
+          if state.conn do
+            :gun.ws_send(state.conn, state.stream_ref, :close)
+          end
+
+          {:stop, :normal, %{state | exit_code: code}}
+        end
+
+      {:ok, %{"type" => "exit", "exit_code" => code}} ->
+        if state.using_control do
+          send(owner, {:exit, command_ref(state), code})
+          {:noreply, %{state | exit_code: code}}
+        else
+          send(owner, {:exit, command_ref(state), code})
 
           if state.conn do
             :gun.ws_send(state.conn, state.stream_ref, :close)
@@ -540,8 +589,14 @@ defmodule Sprites.Command do
     end
   end
 
-  defp handle_close_frame(_code, _reason, %{exit_code: nil, owner: owner, ref: ref} = state) do
-    send(owner, {:exit, %{ref: ref}, 0})
+  defp handle_close_frame(code, _reason, %{exit_code: nil, owner: owner} = state)
+       when code in [nil, 1000, 1001] do
+    send(owner, {:exit, command_ref(state), 0})
+    {:stop, :normal, state}
+  end
+
+  defp handle_close_frame(code, reason, %{exit_code: nil, owner: owner} = state) do
+    send(owner, {:error, command_ref(state), {:ws_closed, code, reason}})
     {:stop, :normal, state}
   end
 
@@ -593,6 +648,9 @@ defmodule Sprites.Command do
   end
 
   defp drain_pending_frames(state), do: state
+
+  defp command_ref(%{command_handle: %__MODULE__{} = handle}), do: handle
+  defp command_ref(%{ref: ref}), do: %{ref: ref}
 
   # Read the response body from a failed HTTP response
   defp read_response_body(_conn, _stream_ref, :fin), do: ""
