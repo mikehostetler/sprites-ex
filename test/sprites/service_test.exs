@@ -80,6 +80,10 @@ defmodule Sprites.ServiceTest do
     assert_receive {:request, request}
     assert request.url.path == "/v1/sprites/demo/services/web"
     assert request.url.query == "duration=5s"
+
+    body = request.body |> IO.iodata_to_binary() |> Jason.decode!()
+    assert body["name"] == "web"
+    assert body["cmd"] == "python"
   end
 
   test "logs_by_name streams typed events" do

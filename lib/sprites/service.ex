@@ -153,13 +153,14 @@ defmodule Sprites.Service do
   def upsert_by_name(%Client{} = client, name, service_name, attrs, opts \\ [])
       when is_binary(name) and is_map(attrs) do
     params = [] |> maybe_put_param(:duration, Keyword.get(opts, :duration))
+    payload = normalize_upsert_payload(attrs, service_name)
 
     with {:ok, body} <-
            client.req
            |> HTTP.put(
              url: "/v1/sprites/#{URI.encode(name)}/services/#{URI.encode(service_name)}",
              params: params,
-             json: normalize_upsert_payload(attrs)
+             json: payload
            )
            |> HTTP.unwrap_body() do
       {:ok, from_map(body)}
@@ -267,8 +268,9 @@ defmodule Sprites.Service do
     end
   end
 
-  defp normalize_upsert_payload(attrs) do
+  defp normalize_upsert_payload(attrs, service_name) do
     %{}
+    |> maybe_put_map(:name, Map.get(attrs, :name) || Map.get(attrs, "name") || service_name)
     |> maybe_put_map(:cmd, Map.get(attrs, :cmd) || Map.get(attrs, "cmd"))
     |> maybe_put_map(:args, Map.get(attrs, :args) || Map.get(attrs, "args"))
     |> maybe_put_map(:needs, Map.get(attrs, :needs) || Map.get(attrs, "needs"))
