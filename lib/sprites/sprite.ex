@@ -3,7 +3,7 @@ defmodule Sprites.Sprite do
   Represents a sprite instance.
   """
 
-  defstruct [:name, :client, :id, :status, :config, :environment]
+  defstruct [:name, :client, :id, :status, :config, :environment, :raw]
 
   @type t :: %__MODULE__{
           name: String.t(),
@@ -11,7 +11,8 @@ defmodule Sprites.Sprite do
           id: String.t() | nil,
           status: String.t() | nil,
           config: map() | nil,
-          environment: map() | nil
+          environment: map() | nil,
+          raw: map() | nil
         }
 
   @doc """
@@ -25,7 +26,8 @@ defmodule Sprites.Sprite do
       id: Map.get(attrs, "id"),
       status: Map.get(attrs, "status"),
       config: Map.get(attrs, "config"),
-      environment: Map.get(attrs, "environment")
+      environment: Map.get(attrs, "environment"),
+      raw: attrs
     }
   end
 
@@ -47,7 +49,43 @@ defmodule Sprites.Sprite do
       |> String.replace(~r/^http/, "ws")
 
     path = "/v1/sprites/#{URI.encode(name)}/exec"
-    query_params = build_query_params(command, args, opts)
+    query_params = build_exec_query_params(command, args, opts)
+
+    "#{base}#{path}?#{URI.encode_query(query_params)}"
+  end
+
+  @doc """
+  Builds the WebSocket URL for attaching to an existing session.
+  """
+  @spec attach_url(t(), String.t() | integer(), keyword()) :: String.t()
+  def attach_url(%__MODULE__{client: client, name: name}, session_id, opts \\ []) do
+    base =
+      client.base_url
+      |> String.replace(~r/^http/, "ws")
+
+    path = "/v1/sprites/#{URI.encode(name)}/exec/#{URI.encode(to_string(session_id))}"
+    query_params = build_attach_query_params(opts)
+
+    if query_params == [] do
+      "#{base}#{path}"
+    else
+      "#{base}#{path}?#{URI.encode_query(query_params)}"
+    end
+  end
+
+  @doc """
+  Builds the legacy WebSocket attach URL using `/exec?session_id=...`.
+  """
+  @spec legacy_attach_url(t(), String.t() | integer(), keyword()) :: String.t()
+  def legacy_attach_url(%__MODULE__{client: client, name: name}, session_id, opts \\ []) do
+    base =
+      client.base_url
+      |> String.replace(~r/^http/, "ws")
+
+    path = "/v1/sprites/#{URI.encode(name)}/exec"
+
+    query_params =
+      [{"session_id", to_string(session_id)} | build_attach_query_params(opts)]
 
     "#{base}#{path}?#{URI.encode_query(query_params)}"
   end
@@ -83,25 +121,36 @@ defmodule Sprites.Sprite do
   @doc """
   Builds a path for sprite-specific API endpoints.
   """
-  @spec path(t(), String.t(), keyword()) :: String.t()
+  @spec path(t(), String.t(), keyword() | map()) :: String.t()
   def path(%__MODULE__{name: name}, endpoint, params \\ []) do
-    query = if params == [], do: "", else: "?#{URI.encode_query(params)}"
+    query = if params in [[], %{}], do: "", else: "?#{URI.encode_query(params)}"
     "/v1/sprites/#{URI.encode(name)}#{endpoint}#{query}"
   end
 
-  defp build_query_params(command, args, opts) do
+  defp build_exec_query_params(command, args, opts) do
     [{"path", command} | Enum.map([command | args], &{"cmd", &1})]
     |> add_stdin_param(opts)
     |> add_dir_param(opts)
     |> add_env_params(opts)
     |> add_tty_params(opts)
     |> add_detachable_param(opts)
-    |> add_session_id_param(opts)
+    |> add_max_run_after_disconnect_param(opts)
+  end
+
+  defp build_attach_query_params(opts) do
+    []
+    |> add_stdin_param(opts)
+    |> add_dir_param(opts)
+    |> add_env_params(opts)
+    |> add_tty_params(opts)
+    |> add_max_run_after_disconnect_param(opts)
   end
 
   defp add_stdin_param(params, opts) do
-    stdin = if Keyword.get(opts, :stdin, false), do: "true", else: "false"
-    [{"stdin", stdin} | params]
+    case Keyword.fetch(opts, :stdin) do
+      {:ok, stdin} -> [{"stdin", if(stdin, do: "true", else: "false")} | params]
+      :error -> params
+    end
   end
 
   defp add_dir_param(params, opts) do
@@ -119,12 +168,17 @@ defmodule Sprites.Sprite do
   end
 
   defp add_tty_params(params, opts) do
-    if Keyword.get(opts, :tty, false) do
-      rows = Keyword.get(opts, :tty_rows, 24)
-      cols = Keyword.get(opts, :tty_cols, 80)
-      [{"tty", "true"}, {"rows", to_string(rows)}, {"cols", to_string(cols)} | params]
-    else
-      params
+    case Keyword.fetch(opts, :tty) do
+      {:ok, true} ->
+        rows = Keyword.get(opts, :tty_rows, 24)
+        cols = Keyword.get(opts, :tty_cols, 80)
+        [{"tty", "true"}, {"rows", to_string(rows)}, {"cols", to_string(cols)} | params]
+
+      {:ok, false} ->
+        [{"tty", "false"} | params]
+
+      :error ->
+        params
     end
   end
 
@@ -136,10 +190,10 @@ defmodule Sprites.Sprite do
     end
   end
 
-  defp add_session_id_param(params, opts) do
-    case Keyword.get(opts, :session_id) do
+  defp add_max_run_after_disconnect_param(params, opts) do
+    case Keyword.get(opts, :max_run_after_disconnect) do
       nil -> params
-      session_id -> [{"session_id", session_id} | params]
+      value -> [{"max_run_after_disconnect", to_string(value)} | params]
     end
   end
 end
