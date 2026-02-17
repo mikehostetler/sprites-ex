@@ -5,7 +5,7 @@ defmodule Sprites.Checkpoint do
   Checkpoints allow you to save and restore the state of a sprite.
   """
 
-  alias Sprites.{Client, Sprite}
+  alias Sprites.{Client, Sprite, HTTP, NDJSONStream, Shapes, StreamMessage}
 
   @doc """
   Represents a checkpoint.
@@ -16,15 +16,17 @@ defmodule Sprites.Checkpoint do
     * `:create_time` - When the checkpoint was created (DateTime)
     * `:history` - List of parent checkpoint IDs
     * `:comment` - Optional user-provided comment
+    * `:raw` - Original API response map
   """
   @type t :: %__MODULE__{
           id: String.t(),
           create_time: DateTime.t() | nil,
           history: [String.t()],
-          comment: String.t() | nil
+          comment: String.t() | nil,
+          raw: map() | nil
         }
 
-  defstruct [:id, :create_time, :comment, history: []]
+  defstruct [:id, :create_time, :comment, :raw, history: []]
 
   @doc """
   Creates a checkpoint from a map.
@@ -42,7 +44,8 @@ defmodule Sprites.Checkpoint do
       id: Map.get(map, "id") || Map.get(map, :id),
       create_time: create_time,
       history: Map.get(map, "history") || Map.get(map, :history) || [],
-      comment: Map.get(map, "comment") || Map.get(map, :comment)
+      comment: Map.get(map, "comment") || Map.get(map, :comment),
+      raw: map
     }
   end
 
@@ -80,19 +83,17 @@ defmodule Sprites.Checkpoint do
         filter -> [history: filter]
       end
 
-    case Req.get(client.req, url: "/v1/sprites/#{URI.encode(name)}/checkpoints", params: params) do
-      {:ok, %{status: status, body: body}} when status in 200..299 and is_list(body) ->
-        {:ok, Enum.map(body, &from_map/1)}
+    with {:ok, body} <-
+           client.req
+           |> HTTP.get(url: "/v1/sprites/#{URI.encode(name)}/checkpoints", params: params)
+           |> HTTP.unwrap_body() do
+      case body do
+        list when is_list(list) ->
+          {:ok, Enum.map(list, &checkpoint_from_api/1)}
 
-      {:ok, %{status: status, body: body}} when status in 200..299 ->
-        # Text response (history filter) - not supported in SDK
-        {:error, {:text_response_not_supported, body}}
-
-      {:ok, %{status: status, body: body}} ->
-        {:error, {:api_error, status, body}}
-
-      {:error, reason} ->
-        {:error, reason}
+        _ ->
+          {:error, {:unexpected_response_shape, body}}
+      end
     end
   end
 
@@ -113,17 +114,13 @@ defmodule Sprites.Checkpoint do
   """
   @spec get_by_name(Client.t(), String.t(), String.t()) :: {:ok, t()} | {:error, term()}
   def get_by_name(%Client{} = client, name, checkpoint_id) when is_binary(name) do
-    url = "/v1/sprites/#{URI.encode(name)}/checkpoints/#{URI.encode(checkpoint_id)}"
-
-    case Req.get(client.req, url: url) do
-      {:ok, %{status: status, body: body}} when status in 200..299 ->
-        {:ok, from_map(body)}
-
-      {:ok, %{status: status, body: body}} ->
-        {:error, {:api_error, status, body}}
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, body} <-
+           client.req
+           |> HTTP.get(
+             url: "/v1/sprites/#{URI.encode(name)}/checkpoints/#{URI.encode(checkpoint_id)}"
+           )
+           |> HTTP.unwrap_body() do
+      {:ok, checkpoint_from_api(body)}
     end
   end
 
@@ -152,17 +149,17 @@ defmodule Sprites.Checkpoint do
   @spec create_by_name(Client.t(), String.t(), keyword()) ::
           {:ok, Enumerable.t()} | {:error, term()}
   def create_by_name(%Client{} = client, name, opts \\ []) when is_binary(name) do
-    url = "#{client.base_url}/v1/sprites/#{URI.encode(name)}/checkpoint"
-    comment = Keyword.get(opts, :comment, "")
+    json =
+      case Keyword.get(opts, :comment) do
+        nil -> %{}
+        "" -> %{}
+        comment -> %{comment: comment}
+      end
 
-    body = if comment != "", do: Jason.encode!(%{comment: comment}), else: "{}"
-
-    headers = [
-      {"authorization", "Bearer #{client.token}"},
-      {"content-type", "application/json"}
-    ]
-
-    start_ndjson_stream(url, :post, headers, body)
+    NDJSONStream.request(client, :post, "/v1/sprites/#{URI.encode(name)}/checkpoint",
+      json: json,
+      parser: &parse_stream_message/1
+    )
   end
 
   @doc """
@@ -186,66 +183,25 @@ defmodule Sprites.Checkpoint do
   @spec restore_by_name(Client.t(), String.t(), String.t()) ::
           {:ok, Enumerable.t()} | {:error, term()}
   def restore_by_name(%Client{} = client, name, checkpoint_id) when is_binary(name) do
-    url =
-      "#{client.base_url}/v1/sprites/#{URI.encode(name)}/checkpoints/#{URI.encode(checkpoint_id)}/restore"
-
-    headers = [
-      {"authorization", "Bearer #{client.token}"}
-    ]
-
-    start_ndjson_stream(url, :post, headers, nil)
+    NDJSONStream.request(
+      client,
+      :post,
+      "/v1/sprites/#{URI.encode(name)}/checkpoints/#{URI.encode(checkpoint_id)}/restore",
+      parser: &parse_stream_message/1
+    )
   end
 
-  # Start a streaming NDJSON request and return a lazy enumerable
-  defp start_ndjson_stream(url, method, headers, body) do
-    # Use :httpc for streaming support
-    # POST requests require a 4-tuple (url, headers, content_type, body)
-    charlist_headers =
-      Enum.map(headers, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end)
-
-    request =
-      case {method, body} do
-        {:post, nil} ->
-          # POST with no body still needs 4-tuple format
-          {String.to_charlist(url), charlist_headers, ~c"application/json", ""}
-
-        {:post, body} ->
-          {String.to_charlist(url), charlist_headers, ~c"application/json", body}
-
-        {_get, _} ->
-          {String.to_charlist(url), charlist_headers}
-      end
-
-    http_method = method
-
-    case :httpc.request(http_method, request, [{:timeout, :infinity}], [
-           {:body_format, :binary},
-           {:sync, true}
-         ]) do
-      {:ok, {{_version, status, _reason}, _headers, response_body}} when status in 200..299 ->
-        # Parse NDJSON response
-        messages =
-          response_body
-          |> String.split("\n", trim: true)
-          |> Enum.map(&parse_stream_message/1)
-          |> Enum.reject(&is_nil/1)
-
-        {:ok, messages}
-
-      {:ok, {{_version, status, _reason}, _headers, response_body}} ->
-        {:error, {:api_error, status, response_body}}
-
-      {:error, reason} ->
-        {:error, reason}
+  defp checkpoint_from_api(map) do
+    case Shapes.parse_checkpoint(map) do
+      {:ok, parsed} -> from_map(parsed)
+      {:error, _reason} -> from_map(map)
     end
   end
 
-  defp parse_stream_message(""), do: nil
-
-  defp parse_stream_message(line) do
-    case Jason.decode(line) do
-      {:ok, map} -> Sprites.StreamMessage.from_map(map)
-      {:error, _} -> nil
+  defp parse_stream_message(map) do
+    case Shapes.parse_checkpoint_event(map) do
+      {:ok, parsed} -> StreamMessage.from_map(parsed, map)
+      {:error, _reason} -> StreamMessage.from_map(map, map)
     end
   end
 end
@@ -256,27 +212,70 @@ defmodule Sprites.StreamMessage do
 
   ## Fields
 
-    * `:type` - Message type: "info", "stdout", "stderr", or "error"
-    * `:data` - Message data (for info/stdout/stderr)
-    * `:error` - Error message (for error type)
+    * `:type` - Message type (for example: "info", "error", "complete")
+    * `:data` - Message data
+    * `:error` - Error string (if present)
+    * `:message` - Event message (if present)
+    * `:time` - ISO8601 timestamp string (if present)
+    * `:timestamp` - Unix millisecond timestamp (if present)
+    * `:exit_code` - Exit code (if present)
+    * `:signal` - Signal name (if present)
+    * `:pid` - Process ID (if present)
+    * `:log_files` - Map of log file paths (if present)
+    * `:raw` - Original event map
   """
   @type t :: %__MODULE__{
-          type: String.t(),
+          type: String.t() | nil,
           data: String.t() | nil,
-          error: String.t() | nil
+          error: String.t() | nil,
+          message: String.t() | nil,
+          time: String.t() | nil,
+          timestamp: number() | nil,
+          exit_code: number() | nil,
+          signal: String.t() | nil,
+          pid: integer() | nil,
+          log_files: map() | nil,
+          raw: map() | nil
         }
 
-  defstruct [:type, :data, :error]
+  defstruct [
+    :type,
+    :data,
+    :error,
+    :message,
+    :time,
+    :timestamp,
+    :exit_code,
+    :signal,
+    :pid,
+    :log_files,
+    :raw
+  ]
+
+  alias Sprites.Shapes
 
   @doc """
   Creates a stream message from a map.
   """
-  @spec from_map(map()) :: t()
-  def from_map(map) when is_map(map) do
+  @spec from_map(map(), map() | nil) :: t()
+  def from_map(map, raw \\ nil) when is_map(map) do
+    parsed =
+      map
+      |> normalize_stream_message()
+      |> parse_stream_message()
+
     %__MODULE__{
-      type: Map.get(map, "type") || Map.get(map, :type),
-      data: Map.get(map, "data") || Map.get(map, :data),
-      error: Map.get(map, "error") || Map.get(map, :error)
+      type: Map.get(parsed, "type"),
+      data: Map.get(parsed, "data"),
+      error: Map.get(parsed, "error"),
+      message: Map.get(parsed, "message"),
+      time: Map.get(parsed, "time"),
+      timestamp: Map.get(parsed, "timestamp"),
+      exit_code: Map.get(parsed, "exit_code"),
+      signal: Map.get(parsed, "signal"),
+      pid: Map.get(parsed, "pid"),
+      log_files: Map.get(parsed, "log_files"),
+      raw: raw || map
     }
   end
 
@@ -289,6 +288,38 @@ defmodule Sprites.StreamMessage do
     |> maybe_put(:type, msg.type)
     |> maybe_put(:data, msg.data)
     |> maybe_put(:error, msg.error)
+    |> maybe_put(:message, msg.message)
+    |> maybe_put(:time, msg.time)
+    |> maybe_put(:timestamp, msg.timestamp)
+    |> maybe_put(:exit_code, msg.exit_code)
+    |> maybe_put(:signal, msg.signal)
+    |> maybe_put(:pid, msg.pid)
+    |> maybe_put(:log_files, msg.log_files)
+  end
+
+  defp normalize_stream_message(map) do
+    %{}
+    |> maybe_put("type", field(map, "type", :type))
+    |> maybe_put("data", field(map, "data", :data))
+    |> maybe_put("error", field(map, "error", :error))
+    |> maybe_put("message", field(map, "message", :message))
+    |> maybe_put("time", field(map, "time", :time))
+    |> maybe_put("timestamp", field(map, "timestamp", :timestamp))
+    |> maybe_put("exit_code", field(map, "exit_code", :exit_code))
+    |> maybe_put("signal", field(map, "signal", :signal))
+    |> maybe_put("pid", field(map, "pid", :pid))
+    |> maybe_put("log_files", field(map, "log_files", :log_files))
+  end
+
+  defp parse_stream_message(map) do
+    case Shapes.parse_stream_message(map) do
+      {:ok, parsed} -> parsed
+      {:error, _reason} -> map
+    end
+  end
+
+  defp field(map, string_key, atom_key) do
+    Map.get(map, string_key) || Map.get(map, atom_key)
   end
 
   defp maybe_put(map, _key, nil), do: map
