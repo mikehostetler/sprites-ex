@@ -17,7 +17,7 @@ defmodule Sprites.Filesystem do
   for relative paths. Absolute paths (starting with `/`) are used as-is.
   """
 
-  alias Sprites.Sprite
+  alias Sprites.{HTTP, Sprite}
 
   @doc """
   Represents a filesystem handle for a sprite.
@@ -73,7 +73,7 @@ defmodule Sprites.Filesystem do
         {:error, :enoent}
 
       {:ok, %{status: status, body: body}} ->
-        {:error, {:api_error, status, body}}
+        {:error, api_error(status, body)}
 
       {:error, reason} ->
         {:error, reason}
@@ -132,7 +132,7 @@ defmodule Sprites.Filesystem do
         :ok
 
       {:ok, %{status: status, body: body}} ->
-        {:error, {:api_error, status, body}}
+        {:error, api_error(status, body)}
 
       {:error, reason} ->
         {:error, reason}
@@ -178,7 +178,7 @@ defmodule Sprites.Filesystem do
         {:error, :enoent}
 
       {:ok, %{status: status, body: body}} ->
-        {:error, {:api_error, status, body}}
+        {:error, api_error(status, body)}
 
       {:error, reason} ->
         {:error, reason}
@@ -237,11 +237,22 @@ defmodule Sprites.Filesystem do
             recursive: "false"
           )
 
-        Req.delete(fs.sprite.client.req, url: delete_url)
-        :ok
+        case Req.delete(fs.sprite.client.req, url: delete_url) do
+          {:ok, %{status: delete_status}} when delete_status in 200..299 ->
+            :ok
+
+          {:ok, %{status: 404}} ->
+            :ok
+
+          {:ok, %{status: delete_status, body: delete_body}} ->
+            {:error, api_error(delete_status, delete_body)}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
 
       {:ok, %{status: status, body: body}} ->
-        {:error, {:api_error, status, body}}
+        {:error, api_error(status, body)}
 
       {:error, reason} ->
         {:error, reason}
@@ -288,7 +299,7 @@ defmodule Sprites.Filesystem do
         :ok
 
       {:ok, %{status: status, body: body}} ->
-        {:error, {:api_error, status, body}}
+        {:error, api_error(status, body)}
 
       {:error, reason} ->
         {:error, reason}
@@ -334,7 +345,7 @@ defmodule Sprites.Filesystem do
         {:error, :enoent}
 
       {:ok, %{status: status, body: body}} ->
-        {:error, {:api_error, status, body}}
+        {:error, api_error(status, body)}
 
       {:error, reason} ->
         {:error, reason}
@@ -397,7 +408,7 @@ defmodule Sprites.Filesystem do
         {:error, :enoent}
 
       {:ok, %{status: status, body: body}} ->
-        {:error, {:api_error, status, body}}
+        {:error, api_error(status, body)}
 
       {:error, reason} ->
         {:error, reason}
@@ -438,7 +449,7 @@ defmodule Sprites.Filesystem do
       workingDir: fs.working_dir
     }
 
-    case Req.post(fs.sprite.client.req, url: "/fs/rename", json: body) do
+    case Req.post(fs.sprite.client.req, url: build_url(fs, "/fs/rename", []), json: body) do
       {:ok, %{status: status}} when status in 200..299 ->
         :ok
 
@@ -446,7 +457,7 @@ defmodule Sprites.Filesystem do
         {:error, :enoent}
 
       {:ok, %{status: status, body: body}} ->
-        {:error, {:api_error, status, body}}
+        {:error, api_error(status, body)}
 
       {:error, reason} ->
         {:error, reason}
@@ -491,7 +502,7 @@ defmodule Sprites.Filesystem do
       recursive: recursive
     }
 
-    case Req.post(fs.sprite.client.req, url: "/fs/copy", json: body) do
+    case Req.post(fs.sprite.client.req, url: build_url(fs, "/fs/copy", []), json: body) do
       {:ok, %{status: status}} when status in 200..299 ->
         :ok
 
@@ -499,7 +510,7 @@ defmodule Sprites.Filesystem do
         {:error, :enoent}
 
       {:ok, %{status: status, body: body}} ->
-        {:error, {:api_error, status, body}}
+        {:error, api_error(status, body)}
 
       {:error, reason} ->
         {:error, reason}
@@ -543,7 +554,7 @@ defmodule Sprites.Filesystem do
       recursive: recursive
     }
 
-    case Req.post(fs.sprite.client.req, url: "/fs/chmod", json: body) do
+    case Req.post(fs.sprite.client.req, url: build_url(fs, "/fs/chmod", []), json: body) do
       {:ok, %{status: status}} when status in 200..299 ->
         :ok
 
@@ -551,7 +562,7 @@ defmodule Sprites.Filesystem do
         {:error, :enoent}
 
       {:ok, %{status: status, body: body}} ->
-        {:error, {:api_error, status, body}}
+        {:error, api_error(status, body)}
 
       {:error, reason} ->
         {:error, reason}
@@ -577,9 +588,8 @@ defmodule Sprites.Filesystem do
   # Private Helpers
   # ============================================================================
 
-  defp build_url(_fs, endpoint, params) do
-    query = URI.encode_query(params)
-    "#{endpoint}?#{query}"
+  defp build_url(fs, endpoint, params) do
+    Sprites.Sprite.path(fs.sprite, endpoint, params)
   end
 
   defp resolve_path(_fs, "/" <> _ = absolute_path), do: absolute_path
@@ -590,5 +600,9 @@ defmodule Sprites.Filesystem do
 
   defp format_mode(mode) when is_integer(mode) do
     Integer.to_string(mode, 8)
+  end
+
+  defp api_error(status, body) do
+    HTTP.api_error(status, body, [])
   end
 end

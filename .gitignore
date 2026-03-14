@@ -40,3 +40,7 @@ sprites-*.tar
 
 # OS files
 .DS_Store
+
+# Env Vars
+.env
+.env.*
